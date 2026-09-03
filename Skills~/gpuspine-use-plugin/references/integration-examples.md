@@ -11,17 +11,22 @@ Contract (from `Runtime/Shaders/SpineGpuSkinning.hlsl`):
 - Include `Runtime/Shaders/SpineGpuSkinning.hlsl`.
 - Declare the vertex struct **exactly** matching the baked layout (see the table below).
 - Call `GpuSpineSkinToWorld(...)` as the first line of the vertex function. Current
-  signature (7 arguments — note the `dynInfo` parameter):
+  signature (8 arguments — note the `dynInfo` and `deformInfo` parameters):
 
   ```hlsl
   float3 GpuSpineSkinToWorld(float3 positionOS, float4 influence12, float2 influence3,
-      float4 boneIndices, float4 boneWeights, float2 dynInfo, uint instanceID);
+      float4 boneIndices, float4 boneWeights, float2 dynInfo, float3 deformInfo, uint instanceID);
   ```
 
-- The skinning buffers (`_GpuSpineBones`, `_GpuSpineInstances`, `_GpuSpineDynSlots` and the
-  two count uniforms) are bound at **material level** by the runtime
-  (`Runtime/Core/GpuSpineBatch.cs`). Never declare or bind them yourself; just include the
-  hlsl file.
+- The skinning buffers (`_GpuSpineBones`, `_GpuSpineInstances`, `_GpuSpineDynSlots`,
+  `_GpuSpineDeform`, `_GpuSpineSlotColors` and the count uniforms) are bound at **material
+  level** by the runtime (`Runtime/Core/GpuSpineBatch.cs`). Never declare or bind them
+  yourself; just include the hlsl file.
+- Compose the vertex color through `GpuSpineGetVertexColor(input.color, input.slotIndex,
+  input.instanceID)` (attachment COLOR x slot color x instance skeleton color), then your
+  own tints, then premultiply rgb by the combined alpha; for additive slots
+  (`deformInfo.z > 0.5`) apply `LinearToSRGB` to the alpha first and output alpha 0 (the
+  CPU PMA additive trick).
 - `#pragma target 3.5` or higher (StructuredBuffer + SV_InstanceID).
 - Assign a material with your shader to `GpuSkeletonRenderer.MaterialOverride`. Only the
   **shader** is taken from the override; the per-page atlas texture and other property
@@ -33,12 +38,14 @@ Contract (from `Runtime/Shaders/SpineGpuSkinning.hlsl`):
 |---|---|---|
 | `POSITION` | float3 | Local (x, y) of influence 0; z = baked z layering |
 | `TEXCOORD0` | float2 | Atlas uv |
-| `COLOR` | float4 | Attachment color (alpha 0 for additive slots) |
+| `COLOR` | float4 | Attachment color with its raw alpha (additive flag is in TEXCOORD6.z) |
 | `TEXCOORD1` | float4 | (vx1, vy1, vx2, vy2) — local coords of influences 1 and 2 |
 | `TEXCOORD2` | float2 | (vx3, vy3) — local coords of influence 3 |
 | `TEXCOORD3` | float4 | 4 bone indices (integers stored as floats) |
 | `TEXCOORD4` | float4 | 4 normalized weights |
 | `TEXCOORD5` | float2 | (dynSlotId, variantId); (-1, -1) for static vertices |
+| `TEXCOORD6` | float3 | (deformOffset, deformMode, additiveFlag); (-1, -1, flag) for non-deform slots |
+| `TEXCOORD7` | float2 | (slotIndex, 0) into the `_GpuSpineSlotColors` segment |
 | `SV_InstanceID` | uint | Instance index into the skinning buffers |
 
 ### Complete example: per-instance tinted unlit PMA shader
@@ -94,6 +101,8 @@ Shader "MyProject/SpineGpu Tinted"
                 float4 boneIndices : TEXCOORD3;
                 float4 boneWeights : TEXCOORD4;
                 float2 dynInfo : TEXCOORD5;
+                float3 deformInfo : TEXCOORD6;
+                float slotIndex : TEXCOORD7;
                 uint instanceID : SV_InstanceID;
             };
 
@@ -119,17 +128,21 @@ Shader "MyProject/SpineGpu Tinted"
                 // GPU skinning first: bind-pose vertex attributes -> skeleton space -> world.
                 float3 positionWS = GpuSpineSkinToWorld(input.positionOS, input.influence12,
                     input.influence3, input.boneIndices, input.boneWeights, input.dynInfo,
-                    input.instanceID);
+                    input.deformInfo, input.instanceID);
                 output.positionCS = TransformWorldToHClip(positionWS);
                 output.uv = input.uv;
 
                 // Per-instance extension slot written by the C# driver below.
                 float4 instanceTint = GpuSpineGetInstanceCustom0(input.instanceID);
-                float4 color = input.color * GpuSpineGetInstanceColor(input.instanceID) * _Color * instanceTint;
-                // PMA: premultiply rgb by the combined alpha. Slots baked for the additive
-                // trick carry a vertex alpha of 0 and keep straight rgb (see Blend above).
-                if (input.color.a > 0.0)
-                    color.rgb *= color.a;
+                float4 color = GpuSpineGetVertexColor(input.color, input.slotIndex, input.instanceID) * _Color * instanceTint;
+                // PMA: premultiply rgb by the combined alpha; additive slots (deformInfo.z)
+                // apply the CPU gamma compensation and output alpha 0 (see Blend above).
+                float combinedAlpha = color.a;
+                if (input.deformInfo.z > 0.5)
+                    combinedAlpha = LinearToSRGB(combinedAlpha);
+                color.rgb *= combinedAlpha;
+                if (input.deformInfo.z > 0.5)
+                    color.a = 0.0;
                 output.color = color;
                 return output;
             }

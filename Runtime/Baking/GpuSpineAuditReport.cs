@@ -22,10 +22,30 @@ namespace GpuSpine.Baking {
 	}
 
 	/// <summary>
+	/// Description of one deform slot: a slot whose attachment vertices are driven by a
+	/// DeformTimeline. Deform is supported by uploading the per-frame deform data with the
+	/// instance buffers and applying it in the vertex shader before the bone weighting, so a
+	/// deform hit no longer blocks baking. <see cref="AttachmentNames"/> is the union of deform
+	/// target attachment names of the slot across all animations (ordinal sorted, deduplicated);
+	/// the baker keeps the entries resolvable through each entry's effective skin.
+	/// </summary>
+	[Serializable]
+	public sealed class GpuSpineDeformSlotInfo {
+		/// <summary>Index of the slot within SkeletonData.Slots (setup draw order).</summary>
+		public int SlotIndex;
+		/// <summary>Name of the slot, for diagnostics and inspector display.</summary>
+		public string SlotName;
+		/// <summary>All deform target attachment names of the slot across every animation.</summary>
+		public string[] AttachmentNames;
+	}
+
+	/// <summary>
 	/// Serializable, graded result of auditing a <see cref="Spine.SkeletonData"/> for GPU baking
-	/// eligibility, stored on the baked-data container asset. Hard failures (deform timelines, slot
-	/// color timelines, attachment sequences, vertex count overflow) flip <see cref="Passed"/> to false
-	/// and block baking entirely. Tolerable deviations (draw order timelines, clipping attachments,
+	/// eligibility, stored on the baked-data container asset. Hard failures (dark color timelines,
+	/// attachment sequences, vertex count overflow) flip <see cref="Passed"/> to false and block
+	/// baking entirely. Deform timelines and slot color timelines (RGBA/RGB/Alpha) are supported via
+	/// per-frame uploads (see <see cref="DeformSlots"/>). Tolerable deviations (draw order timelines,
+	/// clipping attachments,
 	/// influence truncation) are demoted to <see cref="Warnings"/> and do not block baking.
 	/// </summary>
 	[Serializable]
@@ -51,5 +71,8 @@ namespace GpuSpine.Baking {
 		/// <summary>Slots driven by an AttachmentTimeline, ordered by slot index. Empty when the skeleton
 		/// has no attachment timelines.</summary>
 		public List<GpuSpineDynamicSlotInfo> DynamicSlots = new List<GpuSpineDynamicSlotInfo>();
+		/// <summary>Slots driven by a DeformTimeline, ordered by slot index. Empty when the skeleton
+		/// has no deform timelines. Supported: the deform data rides the instance buffers.</summary>
+		public List<GpuSpineDeformSlotInfo> DeformSlots = new List<GpuSpineDeformSlotInfo>();
 	}
 }

@@ -21,7 +21,7 @@ namespace GpuSpine.Baking {
 	/// index; TEXCOORD0 = atlas uv (copied verbatim, no atlas conversion); COLOR = attachment color with
 	/// alpha forced to 0 for additive slots (PMA additive trick); TEXCOORD1 = (vx1, vy1, vx2, vy2);
 	/// TEXCOORD2 = (vx3, vy3); TEXCOORD3 = 4 bone indices (integers as floats); TEXCOORD4 = 4 weights;
-	/// TEXCOORD5 = (dynSlotId, variantId) for dynamic slot variant vertices, (-1, -1) for static ones.
+		/// TEXCOORD5 = (dynSlotId, variantId) for dynamic slot variant vertices, (-1, -1) for static ones.			/// TEXCOORD6 = (deformOffset, deformMode) in float2 units into the per-instance deform segment;			/// (-1, -1) for vertices of non-deform slots. deformMode 0 = absolute replace (unweighted),			/// 1 = offset add (weighted; the vertex stores influence 0's index and influence i reads			/// deformOffset + i, the per-influence deform elements being consecutive in Vertices order).
 	/// <para/>
 	/// Dynamic slots (from the audit's <see cref="GpuSpineAuditReport.DynamicSlots"/>) emit no static
 	/// vertices: their setup attachment is just one variant. Every renderable variant resolvable through
@@ -30,6 +30,9 @@ namespace GpuSpine.Baking {
 	/// </summary>
 	public static class GpuSpineBaker {
 		const int MaxInfluences = 4;
+		/// <summary>Baked vertex/container format version, mixed into the editor's source fingerprint:
+		/// bump on every baked-layout change so stale containers rebuild automatically.</summary>
+		public const int BakeFormatVersion = 2;
 		/// <summary>Defensive cap on the total vertex count of one entry (static zone plus all dynamic
 		/// variants). Exceeding it is a bake-time hard failure: the entry is recorded with a null mesh
 		/// and the audit gains a failure.</summary>
@@ -62,6 +65,10 @@ namespace GpuSpine.Baking {
 			int slotCount = data.Slots.Count;
 			List<GpuSpineDynamicSlotInfo> dynamicSlots = audit.DynamicSlots;
 			bool[] slotIsDynamic = BuildDynamicSlotMap(dynamicSlots, slotCount);
+			GpuSpineDeformSlotEntry[] deformSlots;
+			int deformStride;
+			Dictionary<int, int> deformPrefixBySlot;
+			BuildDeformLayout(data, effectiveSkin, defaultSkin, audit.DeformSlots, out deformSlots, out deformStride, out deformPrefixBySlot);
 
 			MeshBuffers buffers = new MeshBuffers();
 			List<GpuSpineSubmesh> submeshes = new List<GpuSpineSubmesh>();
@@ -107,14 +114,16 @@ namespace GpuSpine.Baking {
 				submeshHasPmaAdditiveSlot |= additive;
 
 				float z = zSpacing * slotIndex;
-				int vertexBase = buffers.positions.Count;
-				if (region != null) {
-					Color32 color = ToColor32(region.R, region.G, region.B, additive ? 0f : region.A);
-					EmitRegion(region, slotData.BoneData.Index, color, z, vertexBase, staticDynUv, buffers);
-				} else {
-					Color32 color = ToColor32(meshAttachment.R, meshAttachment.G, meshAttachment.B, additive ? 0f : meshAttachment.A);
-					EmitMesh(meshAttachment, slotData, color, z, vertexBase, staticDynUv, audit, buffers);
-				}
+					int vertexBase = buffers.positions.Count;
+					int deformPrefix;
+					if (!deformPrefixBySlot.TryGetValue(slotIndex, out deformPrefix)) deformPrefix = -1;
+					if (region != null) {
+						Color32 color = ToColor32(region.R, region.G, region.B, region.A);
+						EmitRegion(region, slotData.BoneData.Index, color, z, vertexBase, staticDynUv, deformPrefix, additive, slotIndex, buffers);
+					} else {
+						Color32 color = ToColor32(meshAttachment.R, meshAttachment.G, meshAttachment.B, meshAttachment.A);
+						EmitMesh(meshAttachment, slotData, color, z, vertexBase, staticDynUv, deformPrefix, additive, slotIndex, audit, buffers);
+					}
 			}
 
 			// Dynamic zone: every renderable variant of every dynamic slot, appended after the static
@@ -130,9 +139,11 @@ namespace GpuSpine.Baking {
 				string[] names = info.AttachmentNames;
 				int variantId = 0;
 				for (int a = 0, an = names.Length; a < an; a++) {
-					Attachment attachment = null;
-					if (effectiveSkin != null) attachment = effectiveSkin.GetAttachment(slotIndex, names[a]);
-					if (attachment == null && defaultSkin != null) attachment = defaultSkin.GetAttachment(slotIndex, names[a]);
+						// The dynamic slot table carries attachment Names (matched against
+						// Slot.Attachment.Name at runtime), which may differ from the placeholder
+						// keys: resolve by name, effective skin first, then default skin.
+						Attachment attachment = FindAttachmentByName(effectiveSkin, slotIndex, names[a]);
+						if (attachment == null) attachment = FindAttachmentByName(defaultSkin, slotIndex, names[a]);
 					RegionAttachment region = attachment as RegionAttachment;
 					MeshAttachment meshAttachment = attachment as MeshAttachment;
 					TextureRegion textureRegion;
@@ -151,12 +162,14 @@ namespace GpuSpine.Baking {
 
 					Vector2 dynUv = new Vector2(dynSlotId, variantId);
 					int vertexStart = buffers.positions.Count;
+					int deformPrefix;
+					if (!deformPrefixBySlot.TryGetValue(slotIndex, out deformPrefix)) deformPrefix = -1;
 					if (region != null) {
-						Color32 color = ToColor32(region.R, region.G, region.B, additive ? 0f : region.A);
-						EmitRegion(region, slotData.BoneData.Index, color, z, vertexStart, dynUv, buffers);
-					} else {
-						Color32 color = ToColor32(meshAttachment.R, meshAttachment.G, meshAttachment.B, additive ? 0f : meshAttachment.A);
-						EmitMesh(meshAttachment, slotData, color, z, vertexStart, dynUv, audit, buffers);
+							Color32 color = ToColor32(region.R, region.G, region.B, region.A);
+							EmitRegion(region, slotData.BoneData.Index, color, z, vertexStart, dynUv, deformPrefix, additive, slotIndex, buffers);
+						} else {
+							Color32 color = ToColor32(meshAttachment.R, meshAttachment.G, meshAttachment.B, meshAttachment.A);
+							EmitMesh(meshAttachment, slotData, color, z, vertexStart, dynUv, deformPrefix, additive, slotIndex, audit, buffers);
 					}
 					variants.Add(new GpuSpineDynamicSlotVariant {
 						DynSlotId = dynSlotId,
@@ -184,7 +197,10 @@ namespace GpuSpine.Baking {
 					DynamicVariants = new GpuSpineDynamicSlotVariant[0],
 					BoneCount = boneCount,
 					VertexCount = 0,
-					DynamicSlotCount = dynamicSlots.Count
+					DynamicSlotCount = dynamicSlots.Count,
+					DeformSlots = deformSlots,
+				DeformStride = deformStride,
+				SlotCount = slotCount
 				};
 			}
 
@@ -198,6 +214,8 @@ namespace GpuSpine.Baking {
 			mesh.SetUVs(3, buffers.uv4);
 			mesh.SetUVs(4, buffers.uv5);
 			mesh.SetUVs(5, buffers.uv6);
+			mesh.SetUVs(6, buffers.uv7);
+			mesh.SetUVs(7, buffers.uv8);
 			// Mesh has no SetColors32; the colors32 property is the Color32 equivalent of SetColors.
 			mesh.colors32 = buffers.colors.ToArray();
 			if (submeshes.Count > 0) {
@@ -218,7 +236,10 @@ namespace GpuSpine.Baking {
 				DynamicVariants = variants.ToArray(),
 				BoneCount = boneCount,
 				VertexCount = buffers.positions.Count,
-				DynamicSlotCount = dynamicSlots.Count
+				DynamicSlotCount = dynamicSlots.Count,
+				DeformSlots = deformSlots,
+				DeformStride = deformStride,
+				SlotCount = slotCount
 			};
 		}
 
@@ -280,20 +301,36 @@ namespace GpuSpine.Baking {
 			return active;
 		}
 
-		static void EmitRegion (RegionAttachment region, int boneIndex, Color32 color, float z, int vertexBase, Vector2 dynUv, MeshBuffers buffers) {
+		static void EmitRegion (RegionAttachment region, int boneIndex, Color32 color, float z, int vertexBase, Vector2 dynUv, int deformPrefix, bool additive, int slotIndex, MeshBuffers buffers) {
 			float[] offset = region.Offset;
 			float[] uvs = region.UVs;
-			// Vertex order replicates the CPU fast path: BL, BR, UL, UR (MeshGenerator.cs:944-951), paired
-			// with triangles {0,2,1, 2,3,1} relative to this attachment's vertex base (MeshGenerator.cs:1115-1121).
-			// Offset/UVs layout: BLX/BLY=0/1, ULX/ULY=2/3, URX/URY=4/5, BRX/BRY=6/7 (RegionAttachment.cs:35-38).
-			EmitSingleInfluenceVertex(buffers, offset[RegionAttachment.BLX], offset[RegionAttachment.BLY],
-				uvs[RegionAttachment.BLX], uvs[RegionAttachment.BLY], z, color, boneIndex, dynUv); // BL
+			// Vertex/uv pairing replicates the CPU fast path (MeshGenerator.cs:944-980) exactly. The bundled
+			// spine-csharp RegionAttachment.ComputeWorldVertices crosses the corner slots ("Vertex order is
+			// different from RegionAttachment.java", RegionAttachment.cs:190): the BL slot receives the BR
+			// offset, UL receives BL, UR receives UL and BR receives UR, while the UVs keep their per-slot
+			// layout (RegionAttachment.cs:35-38, assigned at :153-172). MeshGenerator reads positions in slot
+			// order BL,BR,UL,UR and pairs each with the uv of the same slot, so the equivalent pairing against
+			// the raw offset/uvs arrays is: v0=(BR offset, BL uv), v1=(UR offset, BR uv), v2=(BL offset, UL uv),
+			// v3=(UL offset, UR uv). Triangles stay {0,2,1, 2,3,1} relative to this attachment's vertex base
+			// (MeshGenerator.cs:1115-1123).
+			// Deform: unweighted, so deformMode 0 (absolute replacement, VertexAttachment.cs:106-108). A
+			// corner's deformOffset is its float2 index in the Offset corner-slot order BL=0, UL=1, UR=2,
+			// BR=3 (RegionAttachment.cs:35-38), which matches the verbatim slot.Deform layout the runtime
+			// uploads; the emitted corners are v0=BR, v1=UR, v2=BL, v3=UL. z of the deform uv carries the
+			// additive-blend flag (1 = additive slot).
+			float additiveFlag = additive ? 1f : 0f;
+			Vector3 deform0 = deformPrefix < 0 ? new Vector3(-1f, -1f, additiveFlag) : new Vector3(deformPrefix + 3, 0f, additiveFlag);
+			Vector3 deform1 = deformPrefix < 0 ? new Vector3(-1f, -1f, additiveFlag) : new Vector3(deformPrefix + 2, 0f, additiveFlag);
+			Vector3 deform2 = deformPrefix < 0 ? new Vector3(-1f, -1f, additiveFlag) : new Vector3(deformPrefix + 0, 0f, additiveFlag);
+			Vector3 deform3 = deformPrefix < 0 ? new Vector3(-1f, -1f, additiveFlag) : new Vector3(deformPrefix + 1, 0f, additiveFlag);
 			EmitSingleInfluenceVertex(buffers, offset[RegionAttachment.BRX], offset[RegionAttachment.BRY],
-				uvs[RegionAttachment.BRX], uvs[RegionAttachment.BRY], z, color, boneIndex, dynUv); // BR
-			EmitSingleInfluenceVertex(buffers, offset[RegionAttachment.ULX], offset[RegionAttachment.ULY],
-				uvs[RegionAttachment.ULX], uvs[RegionAttachment.ULY], z, color, boneIndex, dynUv); // UL
+				uvs[RegionAttachment.BLX], uvs[RegionAttachment.BLY], z, color, boneIndex, dynUv, deform0, slotIndex); // v0: BR position, BL-slot uv
 			EmitSingleInfluenceVertex(buffers, offset[RegionAttachment.URX], offset[RegionAttachment.URY],
-				uvs[RegionAttachment.URX], uvs[RegionAttachment.URY], z, color, boneIndex, dynUv); // UR
+				uvs[RegionAttachment.BRX], uvs[RegionAttachment.BRY], z, color, boneIndex, dynUv, deform1, slotIndex); // v1: UR position, BR-slot uv
+			EmitSingleInfluenceVertex(buffers, offset[RegionAttachment.BLX], offset[RegionAttachment.BLY],
+				uvs[RegionAttachment.ULX], uvs[RegionAttachment.ULY], z, color, boneIndex, dynUv, deform2, slotIndex); // v2: BL position, UL-slot uv
+			EmitSingleInfluenceVertex(buffers, offset[RegionAttachment.ULX], offset[RegionAttachment.ULY],
+				uvs[RegionAttachment.URX], uvs[RegionAttachment.URY], z, color, boneIndex, dynUv, deform3, slotIndex); // v3: UL position, UR-slot uv
 			buffers.triangles.Add(vertexBase + 0);
 			buffers.triangles.Add(vertexBase + 2);
 			buffers.triangles.Add(vertexBase + 1);
@@ -302,7 +339,7 @@ namespace GpuSpine.Baking {
 			buffers.triangles.Add(vertexBase + 1);
 		}
 
-		static void EmitSingleInfluenceVertex (MeshBuffers buffers, float x, float y, float u, float v, float z, Color32 color, int boneIndex, Vector2 dynUv) {
+		static void EmitSingleInfluenceVertex (MeshBuffers buffers, float x, float y, float u, float v, float z, Color32 color, int boneIndex, Vector2 dynUv, Vector3 deformUv, int slotIndex) {
 			// Unweighted attachments: influence 0 is the slot's bone with weight 1 (VertexAttachment.cs:107-118).
 			buffers.positions.Add(new Vector3(x, y, z));
 			buffers.uvs.Add(new Vector2(u, v));
@@ -312,10 +349,11 @@ namespace GpuSpine.Baking {
 			buffers.uv4.Add(new Vector4(boneIndex, 0f, 0f, 0f));
 			buffers.uv5.Add(new Vector4(1f, 0f, 0f, 0f));
 			buffers.uv6.Add(dynUv);
+			buffers.uv7.Add(deformUv);
+			buffers.uv8.Add(new Vector2(slotIndex, 0f));
 		}
-
 		static void EmitMesh (MeshAttachment meshAttachment, SlotData slotData, Color32 color, float z, int vertexBase,
-				Vector2 dynUv, GpuSpineAuditReport audit, MeshBuffers buffers) {
+				Vector2 dynUv, int deformPrefix, bool additive, int slotIndex, GpuSpineAuditReport audit, MeshBuffers buffers) {
 			// Linked meshes share their parent mesh's deform data (MeshAttachment.cs:66-82); dereference to
 			// the actual data source. UVs and color stay with the (possibly linked) attachment itself.
 			MeshAttachment source = meshAttachment;
@@ -328,10 +366,14 @@ namespace GpuSpine.Baking {
 
 			if (bones == null) {
 				// Unweighted mesh: Vertices are x/y interleaved local coordinates, single influence = slot bone.
-				for (int v = 0; v < vertexCount; v++) {
-					EmitSingleInfluenceVertex(buffers, vertices[v * 2], vertices[v * 2 + 1],
-						uvs[v * 2], uvs[v * 2 + 1], z, color, slotBoneIndex, dynUv);
-				}
+					for (int v = 0; v < vertexCount; v++) {
+						// Unweighted mesh: deformMode 0 (absolute replacement); deformOffset = the
+						// vertex's float2 index in Vertices order (matches the verbatim slot.Deform layout).
+						float additiveFlag = additive ? 1f : 0f;
+						Vector3 deformUv = deformPrefix < 0 ? new Vector3(-1f, -1f, additiveFlag) : new Vector3(deformPrefix + v, 0f, additiveFlag);
+						EmitSingleInfluenceVertex(buffers, vertices[v * 2], vertices[v * 2 + 1],
+							uvs[v * 2], uvs[v * 2 + 1], z, color, slotBoneIndex, dynUv, deformUv, slotIndex);
+					}
 			} else {
 
 				// Weighted mesh (VertexAttachment.cs:119-136). Bones layout per vertex: influence count n,
@@ -340,9 +382,11 @@ namespace GpuSpine.Baking {
 				// influence bakes its own coordinate along with its bone index and weight.
 				int boneCursor = 0;
 				int vertexCursor = 0;
-				int truncatedInAttachment = 0;
-				for (int v = 0; v < vertexCount; v++) {
-					int n = bones[boneCursor++];
+					int truncatedInAttachment = 0;
+					int influenceStart = 0; // Running total of influences before vertex v (Vertices expansion order).
+					for (int v = 0; v < vertexCount; v++) {
+						bool truncated = false;
+						int n = bones[boneCursor++];
 					float x0 = 0f, y0 = 0f, w0 = 0f, x1 = 0f, y1 = 0f, w1 = 0f;
 					float x2 = 0f, y2 = 0f, w2 = 0f, x3 = 0f, y3 = 0f, w3 = 0f;
 					int i0 = 0, i1 = 0, i2 = 0, i3 = 0;
@@ -381,7 +425,14 @@ namespace GpuSpine.Baking {
 							w0 *= inv; w1 *= inv; w2 *= inv; w3 *= inv;
 						}
 						truncatedInAttachment++;
+						truncated = true;
 					}
+					// Weighted mesh: deformMode 1 (per-influence offset add, VertexAttachment.cs:139-147).
+					// The vertex stores influence 0's float2 index; influence i reads deformOffset + i
+					// (the per-influence deform elements are consecutive in Vertices expansion order).
+					// Truncated vertices (>4 influences) break that consecutiveness, so deform is
+					// disabled for them (deformOffset -1).
+					Vector3 deformUv = deformPrefix < 0 || truncated ? new Vector3(-1f, -1f, additive ? 1f : 0f) : new Vector3(deformPrefix + influenceStart, 1f, additive ? 1f : 0f);
 					buffers.positions.Add(new Vector3(x0, y0, z));
 					buffers.uvs.Add(new Vector2(uvs[v * 2], uvs[v * 2 + 1]));
 					buffers.colors.Add(color);
@@ -390,6 +441,9 @@ namespace GpuSpine.Baking {
 					buffers.uv4.Add(new Vector4(i0, i1, i2, i3));
 					buffers.uv5.Add(new Vector4(w0, w1, w2, w3));
 					buffers.uv6.Add(dynUv);
+					buffers.uv7.Add(deformUv);
+					buffers.uv8.Add(new Vector2(slotIndex, 0f));
+					influenceStart += n;
 				}
 				if (truncatedInAttachment > 0) {
 					audit.TruncatedVertexCount += truncatedInAttachment;
@@ -428,6 +482,102 @@ namespace GpuSpine.Baking {
 			return (byte)Mathf.Clamp(Mathf.RoundToInt(value * 255f), 0, 255);
 		}
 
+		/// <summary>
+		/// Resolves the deform segment layout of one entry: for every deform slot of the audit, the
+		/// deform target attachments resolvable through this entry's effective skin (default skin
+		/// fallback), each with its DeformLength and DefaultValues. Capacity = the maximum DeformLength
+		/// of the slot, Prefix = the running sum, DeformStride = the total. deformPrefixBySlot maps slot
+		/// index to Prefix for the vertex emitters. All units are float2.
+		/// </summary>
+		static void BuildDeformLayout (SkeletonData data, Skin effectiveSkin, Skin defaultSkin, List<GpuSpineDeformSlotInfo> deformSlotInfos,
+			out GpuSpineDeformSlotEntry[] deformSlots, out int deformStride, out Dictionary<int, int> deformPrefixBySlot) {
+			deformSlots = new GpuSpineDeformSlotEntry[0];
+			deformStride = 0;
+			deformPrefixBySlot = new Dictionary<int, int>();
+			if (deformSlotInfos == null || deformSlotInfos.Count == 0) return;
+			List<GpuSpineDeformSlotEntry> slots = new List<GpuSpineDeformSlotEntry>(deformSlotInfos.Count);
+			int prefix = 0;
+			for (int i = 0, n = deformSlotInfos.Count; i < n; i++) {
+				GpuSpineDeformSlotInfo info = deformSlotInfos[i];
+				List<GpuSpineDeformAttachmentInfo> attachments = new List<GpuSpineDeformAttachmentInfo>();
+				int capacity = 0;
+				string[] names = info.AttachmentNames;
+					for (int a = 0, an = names != null ? names.Length : 0; a < an; a++) {
+						// DeformTimeline carries the attachment's Name (e.g. "CatS_01/body"), which may
+						// differ from the skin placeholder key (e.g. "body"): resolve by walking the
+						// skin's placeholders and matching names, effective skin first, then default skin.
+						Attachment attachment = FindAttachmentByName(effectiveSkin, info.SlotIndex, names[a]);
+						if (attachment == null) attachment = FindAttachmentByName(defaultSkin, info.SlotIndex, names[a]);
+						GpuSpineDeformAttachmentInfo attachmentInfo = BuildDeformAttachmentInfo(names[a], attachment);
+						if (attachmentInfo == null) continue;
+						if (attachmentInfo.DeformLength > capacity) capacity = attachmentInfo.DeformLength;
+						attachments.Add(attachmentInfo);
+					}
+				if (attachments.Count == 0) continue; // No deform attachment resolvable in this combination.
+				slots.Add(new GpuSpineDeformSlotEntry {
+					SlotIndex = info.SlotIndex,
+					SlotName = info.SlotName,
+					Capacity = capacity,
+					Prefix = prefix,
+					Attachments = attachments.ToArray()
+				});
+				deformPrefixBySlot[info.SlotIndex] = prefix;
+				prefix += capacity;
+			}
+			deformSlots = slots.ToArray();
+			deformStride = prefix;
+		}
+
+		/// <summary>
+		/// Returns the attachment of the given slot whose Name matches, walking a skin's
+		/// placeholders (null skin-safe). Needed because an attachment's Name may differ from its
+		/// placeholder key (SkeletonJson loads the JSON name field, e.g. "CatS_01/body" vs "body").</summary>
+		static Attachment FindAttachmentByName (Skin skin, int slotIndex, string attachmentName) {
+			if (skin == null || attachmentName == null) return null;
+			foreach (Skin.SkinEntry entry in skin.Attachments) {
+				if (entry.SlotIndex == slotIndex && entry.Attachment != null && entry.Attachment.Name == attachmentName)
+					return entry.Attachment;
+			}
+			return null;
+		}
+
+		/// <summary>
+		/// Deform metadata of one (slot, attachment) pair, in attachment-native float2 order so the
+		/// corner-slot order (BL,UL,UR,BR). Unweighted mesh: DeformLength = vertex count, DefaultValues
+		/// = the Vertices local positions. Weighted mesh: DeformLength = total influence count,
+		/// DefaultValues = all zeros (deform values are per-influence offsets, zero means undeformed,
+		/// VertexAttachment.cs:139-147). Returns null for non-vertex attachments.
+		/// </summary>
+		static GpuSpineDeformAttachmentInfo BuildDeformAttachmentInfo (string name, Attachment attachment) {
+			RegionAttachment region = attachment as RegionAttachment;
+			if (region != null) {
+				float[] offset = region.Offset;
+				Vector2[] defaults = new Vector2[4];
+				for (int i = 0; i < 4; i++) defaults[i] = new Vector2(offset[i * 2], offset[i * 2 + 1]);
+				return new GpuSpineDeformAttachmentInfo { AttachmentName = name, DeformLength = 4, DefaultValues = defaults };
+			}
+			MeshAttachment mesh = attachment as MeshAttachment;
+			if (mesh == null) return null;
+			// Linked meshes share their parent mesh's deform data (MeshAttachment.cs:66-82).
+			MeshAttachment source = mesh;
+			while (source.ParentMesh != null) source = source.ParentMesh;
+			int[] bones = source.Bones;
+			if (bones == null) {
+				float[] vertices = source.Vertices;
+				int vertexCount = source.WorldVerticesLength >> 1;
+				Vector2[] defaults = new Vector2[vertexCount];
+				for (int v = 0; v < vertexCount; v++) defaults[v] = new Vector2(vertices[v * 2], vertices[v * 2 + 1]);
+				return new GpuSpineDeformAttachmentInfo { AttachmentName = name, DeformLength = vertexCount, DefaultValues = defaults };
+			}
+			int influences = 0;
+			for (int i = 0; i < bones.Length; ) {
+				int n = bones[i];
+				influences += n;
+				i += n + 1;
+			}
+			return new GpuSpineDeformAttachmentInfo { AttachmentName = name, DeformLength = influences, DefaultValues = new Vector2[influences] };
+		}
+
 		static void Fail (GpuSpineAuditReport audit, string reason) {
 			audit.Passed = false;
 			audit.Failures.Add(reason);
@@ -443,6 +593,8 @@ namespace GpuSpine.Baking {
 			public readonly List<Vector4> uv4 = new List<Vector4>();      // TEXCOORD3: 4 bone indices
 			public readonly List<Vector4> uv5 = new List<Vector4>();      // TEXCOORD4: 4 weights
 			public readonly List<Vector2> uv6 = new List<Vector2>();      // TEXCOORD5: (dynSlotId, variantId), (-1, -1) static
+			public readonly List<Vector3> uv7 = new List<Vector3>();      // TEXCOORD6: (deformOffset, deformMode, additiveFlag), (-1, -1, flag) non-deform
+			public readonly List<Vector2> uv8 = new List<Vector2>();      // TEXCOORD7: (slot index, 0)
 			public readonly List<int> triangles = new List<int>();
 		}
 	}

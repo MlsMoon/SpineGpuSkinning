@@ -12,6 +12,9 @@ graded by the audit (`Runtime/Baking/GpuSpineAuditor.cs`, report in
 | Hard failure | Feature rewrites the baked vertex stream at runtime | Blocked entirely (container keeps the report only); a per-combination overflow blocks just that entry | Component refuses the GPU path |
 | Warning | Tolerated deviation | Baked normally | GPU path allowed; draw-order/clipping warnings additionally require an opt-in component option |
 | Dynamic slot | AttachmentTimeline-driven slot | Every attachment variant pre-baked | GPU path with per-instance variant folding in the vertex shader |
+| Deform slot | DeformTimeline-driven slot | Deform segment layout pre-baked (per-slot prefix/capacity, per-attachment defaults) | GPU path: the CPU-computed `slot.Deform` is uploaded per instance per frame and applied in the vertex shader before the bone weighting |
+| Slot color | RGBATimeline / RGBTimeline / AlphaTimeline-driven slot | Nothing extra (all slots' colors ride the buffer anyway) | GPU path: `slot.R/G/B/A` of every slot is uploaded per instance per frame and multiplied into the vertex color |
+| Slot color | RGBATimeline / RGBTimeline / AlphaTimeline-driven slot | Nothing extra (all slots' colors ride the buffer anyway) | GPU path: `slot.R/G/B/A` of every slot is uploaded per instance per frame and multiplied into the vertex color |
 
 ## Hard failures (audit.Passed = false)
 
@@ -21,8 +24,7 @@ a warning and stays on the CPU path.
 
 | Finding | Why baking breaks | Report text pattern |
 |---|---|---|
-| `DeformTimeline` | Free-form deformation rewrites the bind-pose vertex stream at runtime (slot.Deform) | `Animation '{anim}' contains a DeformTimeline (slot '{slot}', attachment '{att}'): free-form deformation rewrites the bind-pose vertex stream at runtime.` |
-| Slot color timeline: `RGBATimeline`, `RGBTimeline`, `AlphaTimeline`, `RGBA2Timeline`, `RGB2Timeline` | Slot color animation is a per-frame dynamic quantity; the GPU path does not support it yet | `Animation '{anim}' contains a slot color timeline ({type}, slot '{slot}'): slot color animation is not supported by the GPU path yet.` |
+| Dark color timeline: `RGBA2Timeline`, `RGB2Timeline` | Tint black (second color) is not implemented by the GPU path | `Animation '{anim}' contains a dark color timeline ({type}, slot '{slot}'): tint black is not supported by the GPU path.` |
 | `Sequence` on a `RegionAttachment` or `MeshAttachment` | uvs change per frame; baked uvs would be invalid | `'{Region|Mesh}Attachment' '{att}' (skin '{skin}', slot '{slot}') has a Sequence: uv changes per frame, baked uvs would be invalid.` |
 | Vertex count overflow, detected by the baker | Defensive cap `MaxVertexCount = 1 << 20` (1,048,576) per entry (static zone + all dynamic variants) | `Entry '{combo}' would bake {n} vertices (limit 1048576): vertex count overflow.` The entry is recorded with a null mesh; other combinations still bake. |
 | `SkeletonData` null | Nothing to audit | `SkeletonData is null.` |
@@ -41,6 +43,26 @@ Report text patterns:
 
 - `Animation '{anim}' contains a DrawOrderTimeline: tolerated, runtime draw order changes may reorder overlapping attachments against the baked setup order.`
 - `ClippingAttachment '{att}' (skin '{skin}', slot '{slot}'): tolerated, clipped regions render unclipped on the GPU path.`
+
+## Deform slots (DeformTimeline support)
+
+A deform hit no longer blocks baking. `slot.Deform` is computed by the CPU `AnimationState`
+every frame anyway; the component copies it into a per-instance deform segment
+(`Vector2[entry.DeformStride]`) that the batch uploads alongside the bone palette, and the
+vertex shader applies it to each influence's local coordinate **before** the bone weighting:
+
+- Unweighted attachment (region / unweighted mesh, mode 0): the deform value replaces the
+  local coordinate absolutely (`VertexAttachment.cs:106-108`).
+- Weighted mesh (mode 1): the deform value is added per influence (`VertexAttachment.cs:139-147`);
+  a vertex stores influence 0's float2 index and influence `i` reads `deformOffset + i`
+  (per-influence deform elements are consecutive in `Vertices` expansion order). Vertices
+  truncated to 4 influences have deform disabled (deformOffset -1).
+- No active deform (`slot.Deform.Count == 0`): the runtime writes the current attachment's
+  baked `DefaultValues` (unweighted: local positions; weighted: all zeros = undeformed),
+  or all zeros when the attachment is not a baked deform target. Correctness of the
+  `Count > 0` match: `DeformTimeline.Apply` only writes when the slot's attachment resolves
+  to the timeline's target (`Animation.cs:1773-1776`), and the attachment setter clears
+  deform on an attachment change (`Slot.cs:139-156`).
 - `MeshAttachment '{att}' (slot '{slot}') has {n} vertex(es) with more than 4 bone influences; kept the strongest 4 and renormalized.`
 
 ## Runtime admittance gates (component OnEnable, in evaluation order)
@@ -101,3 +123,21 @@ The instance renders exactly as if the component were not there: `updateMode` an
 on disable). There is no partial GPU state, no residual buffer, and no required action —
 fixing the cause (rebake, declare the combo, set the option) lets the next enable switch
 to the GPU path automatically.
+
+## Slot colors (RGBATimeline / RGBTimeline / AlphaTimeline support)
+
+Every slot's `slot.R/G/B/A` is uploaded per instance per frame in the `_GpuSpineSlotColors`
+buffer (stride 16, `[instanceID * _GpuSpineSlotCount + slotIndex]`; every vertex carries its
+slot index in TEXCOORD7). The vertex shader composes the final color exactly like the CPU
+(`MeshGenerator.cs:953-972`): `attachment COLOR x slot color x instance skeleton color`,
+then premultiplies rgb by the combined alpha (PMA). Additive-blend slots no longer bake
+alpha 0 into COLOR: they carry `additiveFlag = 1` in TEXCOORD6.z, and the shader applies
+the CPU's additive trick at draw time (`alpha = LinearToSRGB(alpha)` compensation from
+`MeshGenerator.cs:667-670`, premultiply, then `color.a = 0` so
+`Blend One OneMinusSrcAlpha` adds fully, `MeshGenerator.cs:955, 964-965`). Dark color
+timelines (RGBA2/RGB2, tint black) stay a hard failure.
+
+**Name-vs-key pitfall**: an attachment's `Name` (e.g. `CatS_01/body`, from the JSON `name`
+field) can differ from its skin placeholder key (e.g. `body`). The dynamic slot table and
+the deform segment resolution both match by `Name` — matching by key silently folds every
+dynamic variant and resolves every deform segment empty (the skeleton renders nothing).

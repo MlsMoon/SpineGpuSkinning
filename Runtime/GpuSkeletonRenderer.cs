@@ -66,6 +66,11 @@ namespace GpuSpine {
 		uint[] dynamicSlotSelection;                    // [dynSlotId] -> variant id or FoldAllVariants
 		HashSet<string> warnedMissingVariants;
 		bool dynamicSlotsDirty;
+		DeformSlotState[] deformSlots;   // null while the current entry has no deform slots
+		Vector2[] deformSegment;         // [entry.DeformStride] per-instance deform data (same lifecycle as boneMatrices)
+		bool deformDirty;
+		Vector4[] slotColors;            // [entry.SlotCount] per-instance slot colors (slot.R/G/B/A), same lifecycle
+		bool slotColorsDirty;
 
 		/// <summary>True while this skeleton is submitted through the GPU instanced path.</summary>
 		public bool IsGpuActive { get { return gpuActive; } }
@@ -158,6 +163,10 @@ namespace GpuSpine {
 			ExportBoneMatrices(skeleton); // A valid palette from the very first frame.
 			BuildDynamicSlotState(entry);
 			RefreshDynamicSlots(skeleton); // A valid variant selection from the very first frame.
+			BuildDeformState(entry);
+			FillDeform(skeleton); // A valid deform segment from the very first frame.
+			BuildSlotColorState(entry);
+			FillSlotColors(skeleton); // Valid slot colors from the very first frame.
 		}
 
 		void OnDisable () {
@@ -186,7 +195,10 @@ namespace GpuSpine {
 			Skeleton skeleton = skeletonAnimation.Skeleton;
 			if (skeleton == null) return;
 			ExportBoneMatrices(skeleton);
+			ExportBoneMatrices(skeleton);
 			RefreshDynamicSlots(skeleton);
+			FillDeform(skeleton);
+			FillSlotColors(skeleton);
 
 			string key = GpuSpineBakedRuntime.ComputeRuntimeKey(skeleton);
 			if (key == lastKey) return;
@@ -197,7 +209,12 @@ namespace GpuSpine {
 				if (entry.BoneCount != boneMatrices.Length) boneMatrices = new GpuBoneMatrix[entry.BoneCount];
 				GpuSkinningManager.ChangeEntry(this, entry);
 				BuildDynamicSlotState(entry); // The new entry has its own variant table and slot count.
+				BuildDynamicSlotState(entry); // The new entry has its own variant table and slot count.
 				RefreshDynamicSlots(skeleton);
+				BuildDeformState(entry); // The new entry has its own deform layout.
+				FillDeform(skeleton);
+				BuildSlotColorState(entry); // The new entry has its own slot count.
+				FillSlotColors(skeleton);
 			} else {
 				RestoreCpuPath("GpuSkeletonRenderer fell back to the CPU path: no baked entry for the new skin combination (key " + key + ").");
 			}
@@ -251,6 +268,92 @@ namespace GpuSpine {
 			dynamicSlotsDirty = true; // The fold-all selection must be refreshed before upload.
 		}
 
+		/// <summary>Per-deform-slot runtime state: the slot's segment window plus the fallback lookup
+		/// by attachment name (DefaultValues/DeformLength from the baked entry).</summary>
+		sealed class DeformSlotState {
+			public int SlotIndex;
+			public int Prefix;
+			public int Capacity;
+			public Dictionary<string, GpuSpineDeformAttachmentInfo> AttachmentByName;
+		}
+
+		/// <summary>(Re)builds the per-entry deform state: one segment window per baked deform slot and
+		/// the flat per-instance deform segment of entry.DeformStride float2 entries. Called on enable
+		/// and on every entry change; an entry without deform slots keeps both null.</summary>
+		void BuildDeformState (GpuSpineBakedEntry entry) {
+			GpuSpineDeformSlotEntry[] baked = entry.DeformSlots;
+			if (baked == null || baked.Length == 0 || entry.DeformStride <= 0) {
+				deformSlots = null;
+				deformSegment = null;
+				return;
+			}
+			deformSlots = new DeformSlotState[baked.Length];
+			for (int i = 0; i < baked.Length; i++) {
+				GpuSpineDeformSlotEntry slotEntry = baked[i];
+				Dictionary<string, GpuSpineDeformAttachmentInfo> byName = new Dictionary<string, GpuSpineDeformAttachmentInfo>();
+				GpuSpineDeformAttachmentInfo[] attachments = slotEntry.Attachments;
+				if (attachments != null) {
+					for (int a = 0; a < attachments.Length; a++)
+						if (attachments[a] != null) byName[attachments[a].AttachmentName] = attachments[a];
+				}
+				deformSlots[i] = new DeformSlotState {
+					SlotIndex = slotEntry.SlotIndex,
+					Prefix = slotEntry.Prefix,
+					Capacity = slotEntry.Capacity,
+					AttachmentByName = byName
+				};
+			}
+			deformSegment = new Vector2[entry.DeformStride];
+			deformDirty = true; // The segment must be uploaded before the first submission.
+		}
+
+		/// <summary>Refreshes the per-instance deform segment from the live skeleton state, once per
+		/// UpdateComplete after the bone matrix export. Per deform slot: when slot.Deform is written
+		/// (DeformTimeline.Apply wrote it for the current attachment this frame: the timeline only
+		/// writes when slot.Attachment resolves to its target (Animation.cs:1773-1776) and the
+		/// attachment setter clears deform on an attachment change (Slot.cs:139-156), so Count > 0
+		/// always matches the current attachment), copy min(Count/2, Capacity) float2 verbatim and
+		/// zero-fill the rest; otherwise write the current attachment's baked DefaultValues
+		/// (unweighted: local positions; weighted: all zeros = undeformed), or all zeros when the
+		/// attachment name is not a baked deform attachment.</summary>
+		void FillDeform (Skeleton skeleton) {
+			if (deformSegment == null || deformSlots == null) return;
+			ExposedList<Slot> slots = skeleton.Slots;
+			for (int i = 0; i < deformSlots.Length; i++) {
+				DeformSlotState state = deformSlots[i];
+				int prefix = state.Prefix;
+				int capacity = state.Capacity;
+				float[] source = null;
+				int sourcePairs = 0;
+				Vector2[] defaults = null;
+				if (state.SlotIndex >= 0 && state.SlotIndex < slots.Count) {
+					Slot slot = slots.Items[state.SlotIndex];
+					ExposedList<float> deform = slot.Deform;
+					if (deform.Count > 0) {
+						source = deform.Items;
+						sourcePairs = deform.Count >> 1;
+					} else {
+						Attachment attachment = slot.Attachment;
+						GpuSpineDeformAttachmentInfo info;
+						if (attachment != null && state.AttachmentByName.TryGetValue(attachment.Name, out info))
+							defaults = info.DefaultValues;
+					}
+				}
+				if (source != null) {
+					int pairs = sourcePairs < capacity ? sourcePairs : capacity;
+					for (int p = 0; p < pairs; p++) deformSegment[prefix + p] = new Vector2(source[p * 2], source[p * 2 + 1]);
+					for (int p = pairs; p < capacity; p++) deformSegment[prefix + p] = Vector2.zero;
+				} else if (defaults != null) {
+					int pairs = defaults.Length < capacity ? defaults.Length : capacity;
+					for (int p = 0; p < pairs; p++) deformSegment[prefix + p] = defaults[p];
+					for (int p = pairs; p < capacity; p++) deformSegment[prefix + p] = Vector2.zero;
+				} else {
+					for (int p = 0; p < capacity; p++) deformSegment[prefix + p] = Vector2.zero;
+				}
+				deformDirty = true;
+			}
+		}
+
 		/// <summary>Resolves every dynamic slot's selected variant from the live skeleton state
 		/// (Slot.Attachment) and updates the selection array the batches upload: the variant id whose
 		/// <see cref="GpuSpineDynamicSlotVariant.AttachmentName"/> matches, or
@@ -293,6 +396,32 @@ namespace GpuSpine {
 					+ "' is not a baked variant; folding all variants of the slot. Rebake the SkeletonDataAsset.", this);
 		}
 
+		/// <summary>(Re)allocates the per-instance slot color segment of entry.SlotCount entries.
+		/// Every slot's color rides the buffer (setup-static colors included), which keeps the
+		/// shader path uniform and removes any static color baking. Called on enable and on every
+		/// entry change.</summary>
+		void BuildSlotColorState (GpuSpineBakedEntry entry) {
+			slotColors = entry.SlotCount > 0 ? new Vector4[entry.SlotCount] : null;
+			slotColorsDirty = true; // The segment must be uploaded before the first submission.
+		}
+
+		/// <summary>Refreshes the per-instance slot color segment from the live skeleton state
+		/// (slot.R/G/B/A of every slot), once per UpdateComplete. Slot color timelines
+		/// (RGBATimeline/RGBTimeline/AlphaTimeline) write those same fields through the CPU
+		/// AnimationState, so timeline-driven colors arrive here for free. Slots beyond the live
+		/// skeleton's count stay at white.</summary>
+		void FillSlotColors (Skeleton skeleton) {
+			if (slotColors == null) return;
+			ExposedList<Slot> slots = skeleton.Slots;
+			int count = slotColors.Length < slots.Count ? slotColors.Length : slots.Count;
+			for (int i = 0; i < count; i++) {
+				Slot slot = slots.Items[i];
+				slotColors[i] = new Vector4(slot.R, slot.G, slot.B, slot.A);
+			}
+			for (int i = count; i < slotColors.Length; i++) slotColors[i] = Vector4.one;
+			slotColorsDirty = true;
+		}
+
 		/// <summary>Full restore of the original CPU path: original updateMode, original MeshRenderer
 		/// enabled state, event unsubscribed, batches left, references released.</summary>
 		void RestoreCpuPath (string reason) {
@@ -312,6 +441,11 @@ namespace GpuSpine {
 			dynamicSlotSelection = null;
 			warnedMissingVariants = null;
 			dynamicSlotsDirty = false;
+			deformSlots = null;
+			deformSegment = null;
+			deformDirty = false;
+			slotColors = null;
+			slotColorsDirty = false;
 		}
 
 		internal GpuBoneMatrix[] BoneMatrices { get { return boneMatrices; } }
@@ -321,9 +455,33 @@ namespace GpuSpine {
 		internal uint[] DynamicSlotSelection { get { return dynamicSlotSelection; } }
 
 		/// <summary>Reads and clears the dynamic slot selection dirty flag set by RefreshDynamicSlots.</summary>
+		/// <summary>Reads and clears the dynamic slot selection dirty flag set by RefreshDynamicSlots.</summary>
 		internal bool ConsumeDynamicSlotsDirty () {
 			bool dirty = dynamicSlotsDirty;
 			dynamicSlotsDirty = false;
+			return dirty;
+		}
+
+		/// <summary>The per-instance deform segment uploaded by the batches (null while the current
+		/// entry has no deform slots). Same lifecycle as the bone matrix palette.</summary>
+		internal Vector2[] DeformSegment { get { return deformSegment; } }
+
+		/// <summary>Reads and clears the deform dirty flag set by FillDeform.</summary>
+		internal bool ConsumeDeformDirty () {
+			bool dirty = deformDirty;
+			deformDirty = false;
+			return dirty;
+		}
+
+		/// <summary>The per-instance slot color segment uploaded by the batches (null while the
+		/// current entry has no slots, which never happens in practice). Same lifecycle as the
+		/// bone matrix palette.</summary>
+		internal Vector4[] SlotColors { get { return slotColors; } }
+
+		/// <summary>Reads and clears the slot color dirty flag set by FillSlotColors.</summary>
+		internal bool ConsumeSlotColorsDirty () {
+			bool dirty = slotColorsDirty;
+			slotColorsDirty = false;
 			return dirty;
 		}
 

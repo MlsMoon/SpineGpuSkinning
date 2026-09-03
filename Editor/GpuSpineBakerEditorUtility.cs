@@ -60,6 +60,11 @@ namespace GpuSpine.Editor {
 				container.name = ContainerName;
 			}
 
+			// Drop the cached SkeletonData first: it survives json/atlas edits within the same
+			// editor session (no domain reload), and Rebake would otherwise bake stale data while
+			// recording the fresh source fingerprint. Clear() (spine-unity SkeletonDataAsset.cs:143)
+			// only nulls the caches; GetSkeletonData below re-reads from disk.
+			asset.Clear();
 			SkeletonData data = asset.GetSkeletonData(true);
 			GpuSpineAuditReport audit = GpuSpineAuditor.Audit(data);
 			List<BakeTarget> targets = CollectTargets(data, audit, container);
@@ -197,7 +202,8 @@ namespace GpuSpine.Editor {
 				Passed = audit.Passed,
 				HasDrawOrderTimeline = audit.HasDrawOrderTimeline,
 				HasClipping = audit.HasClipping,
-				DynamicSlots = audit.DynamicSlots
+				DynamicSlots = audit.DynamicSlots,
+				DeformSlots = audit.DeformSlots
 			};
 			report.Failures.AddRange(audit.Failures);
 			report.Warnings.AddRange(audit.Warnings);
@@ -244,7 +250,7 @@ namespace GpuSpine.Editor {
 			string[] dependencies = AssetDatabase.GetDependencies(path, true);
 			Array.Sort(dependencies, StringComparer.Ordinal);
 			StringBuilder builder = new StringBuilder(dependencies.Length * 64);
-			builder.Append("v1|scale:").Append(asset.scale.ToString("R", CultureInfo.InvariantCulture));
+            builder.Append("v1|fmt:").Append(GpuSpineBaker.BakeFormatVersion).Append("|scale:").Append(asset.scale.ToString("R", CultureInfo.InvariantCulture));
 			for (int i = 0; i < dependencies.Length; i++) {
 				string dependency = dependencies[i];
 				if (dependency == path) continue;

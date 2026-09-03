@@ -31,8 +31,9 @@ If the audit fails (see table below), the instance **silently stays on the CPU p
 
 | Feature detected | Behavior |
 |---|---|
-| Deform timeline | CPU fallback |
-| Slot color timeline (RGBA / RGB / Alpha / RGBA2 / RGB2) | CPU fallback |
+| Deform timeline | Supported: the CPU-computed `slot.Deform` rides the per-instance deform buffer every frame and is applied in the vertex shader before the bone weighting (absolute replacement for unweighted attachments, per-influence offsets for weighted ones) |
+| Slot color timeline (RGBA / RGB / Alpha) | Supported: every slot's `slot.R/G/B/A` rides the per-instance slot color buffer every frame and is multiplied into the vertex color in the shader (CPU-identical composition) |
+| Dark color timeline (RGBA2 / RGB2, tint black) | CPU fallback (tint black is not implemented) |
 | Texture sequence | CPU fallback |
 | No baked entry for the current skin combination | CPU fallback with a warning |
 | SkeletonRenderer.zSpacing ≠ baked zSpacing (0) | CPU fallback with a warning |

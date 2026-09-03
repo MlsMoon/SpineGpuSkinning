@@ -44,6 +44,7 @@ Shader "GpuSpine/URP/Skeleton"
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "SpineGpuSkinning.hlsl"
+            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Color.hlsl"
 
             struct Attributes
             {
@@ -55,6 +56,8 @@ Shader "GpuSpine/URP/Skeleton"
                 float4 boneIndices : TEXCOORD3; // 4 bone indices, integers stored as floats
                 float4 boneWeights : TEXCOORD4; // 4 normalized weights
                 float2 dynInfo : TEXCOORD5;     // x = dynamic slot id (-1 = static), y = variant id
+                float3 deformInfo : TEXCOORD6;  // x = deform float2 index (-1 = none), y = mode (0 = replace, 1 = add), z = additive flag
+                float slotIndex : TEXCOORD7;    // slot index of the vertex (SkeletonData.Slots order)
                 uint instanceID : SV_InstanceID;
             };
 
@@ -80,15 +83,26 @@ Shader "GpuSpine/URP/Skeleton"
 
                 // GPU skinning: bind-pose vertex attributes -> skeleton space -> world space.
                 float3 positionWS = GpuSpineSkinToWorld(input.positionOS, input.influence12,
-                    input.influence3, input.boneIndices, input.boneWeights, input.dynInfo, input.instanceID);
+                    input.influence3, input.boneIndices, input.boneWeights, input.dynInfo,
+                    input.deformInfo, input.instanceID);
                 output.positionCS = TransformWorldToHClip(positionWS);
                 output.uv = input.uv;
 
-                float4 color = input.color * GpuSpineGetInstanceColor(input.instanceID) * _Color;
-                // PMA: premultiply rgb by the combined alpha. Slots baked for the additive trick
-                // carry a vertex alpha of 0 and keep straight rgb (see Blend above).
-                if (input.color.a > 0.0)
-                    color.rgb *= color.a;
+                // Vertex color composition, 1:1 with the CPU path (MeshGenerator.cs:953-972):
+                // attachment COLOR x slot color x instance skeleton color x material tint, then
+                // premultiply rgb by the combined alpha (PMA).
+                float4 color = GpuSpineGetVertexColor(input.color, input.slotIndex, input.instanceID) * _Color;
+                float combinedAlpha = color.a;
+                if (input.deformInfo.z > 0.5)
+                    // Additive slot, linear color space: the CPU compensates the shader-side gamma
+                    // conversion (MeshGenerator.cs:667-670, under the project's
+                    // LINEAR_COLOR_SPACE_FIX_ADDITIVE_ALPHA define).
+                    combinedAlpha = LinearToSRGB(combinedAlpha);
+                color.rgb *= combinedAlpha;
+                if (input.deformInfo.z > 0.5)
+                    // PMA additive trick: straight rgb with alpha 0, so Blend One OneMinusSrcAlpha
+                    // adds the source fully (MeshGenerator.cs:955, 964-965).
+                    color.a = 0.0;
                 output.color = color;
                 return output;
             }

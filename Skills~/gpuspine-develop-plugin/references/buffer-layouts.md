@@ -50,6 +50,10 @@ Bound by `GpuSpineBatch.EnsureCapacity` via `material.SetBuffer` / `material.Set
 | `_GpuSpineBoneCount` | `uint` | Palette stride per instance |
 | `_GpuSpineDynSlots` | `StructuredBuffer<uint>` | `[instanceID * _GpuSpineDynSlotCount + dynSlotId]` — selected variant id, or `0xFFFFFFFF` to fold every variant of the slot |
 | `_GpuSpineDynSlotCount` | `uint` | Dynamic slot count per instance; 0 for static-only entries — the buffer is then left unbound and every shader read is short-circuited by this count (v1 targets Windows/D3D11, where reading an unbound StructuredBuffer additionally returns 0) |
+| `_GpuSpineDeform` | `StructuredBuffer<float2>` (stride 8) | `[instanceID * _GpuSpineDeformStride + deformOffset]` — per-instance deform segment of `Entry.DeformStride` float2 entries; per deform slot `Capacity` entries at `Prefix`, copied verbatim from `slot.Deform` or filled with the attachment's baked `DefaultValues` |
+| `_GpuSpineDeformStride` | `uint` | Deform segment length per instance; 0 for deform-less entries — the buffer is then left unbound and every shader read is short-circuited by the baked deformOffset of -1 |
+| `_GpuSpineSlotColors` | `StructuredBuffer<float4>` (stride 16) | `[instanceID * _GpuSpineSlotCount + slotIndex]` — per-instance slot colors (`slot.R/G/B/A` of every slot, setup-static colors included) |
+| `_GpuSpineSlotCount` | `uint` | Slot color segment length per instance (`Entry.SlotCount`); 0 never happens in practice — the slot color multiply is then short-circuited (slot colors effectively all 1) |
 
 Upload cadence (`GpuSpineBatch.SubmitFrame`):
 
@@ -57,6 +61,10 @@ Upload cadence (`GpuSpineBatch.SubmitFrame`):
   changed, instance count changed, or an instance reports `paletteDirty` /
   `dynamicSlotsDirty`). The dynSlot staging shares the palette's reorder triggers because
   both are filled in the same sorted loop: `[instanceIndex * dynamicSlotCount + dynSlotId]`.
+  The deform and slot color buffers share the same dirty model and staging layouts
+  `[instanceIndex * deformStride]` / `[instanceIndex * slotCount]`; an instance marks
+  `deformDirty` and `slotColorsDirty` on every `UpdateComplete` (both segments are
+  rebuilt from the live skeleton each frame).
 - Instance buffer: every frame (transform/color/custom are untracked).
 
 ## Indirect args buffer — uint[5]
@@ -81,12 +89,14 @@ entry exceeds 65535 vertices.
 |---|---|---|
 | POSITION | Vector3 | Local (x, y) of influence 0; z = zSpacing * setup draw order index (baked z layering; the shader passes z through) |
 | TEXCOORD0 | Vector2 | Atlas uv, copied verbatim from the attachment |
-| COLOR | Color32 | Attachment color; **alpha 0 for additive slots** (PMA additive trick) |
+| COLOR | Color32 | Attachment color with its **raw alpha** (additive slots no longer bake alpha 0; the additive flag moved to TEXCOORD6.z) |
 | TEXCOORD1 | Vector4 | (vx1, vy1, vx2, vy2) — local coords of influences 1 and 2 |
 | TEXCOORD2 | Vector2 | (vx3, vy3) — local coords of influence 3 |
 | TEXCOORD3 | Vector4 | 4 bone indices, integers stored as floats |
 | TEXCOORD4 | Vector4 | 4 weights; normalized, empty influences are 0 |
 | TEXCOORD5 | Vector2 | (dynSlotId, variantId) for dynamic slot variant vertices; (-1, -1) for static vertices |
+| TEXCOORD6 | Vector3 | (deformOffset, deformMode, additiveFlag): float2 index into the instance deform segment, the application mode, and 1 for additive-blend slots; (-1, -1, additiveFlag) for vertices of non-deform slots. deformMode 0 = absolute replacement (unweighted), 1 = offset add (weighted; the vertex stores influence 0's index and influence i reads deformOffset + i, the per-influence deform elements being consecutive in `Vertices` expansion order). The index counts in the slot's attachment-native order (region corner-slot order BL,UL,UR,BR; unweighted vertex order; weighted influence-expansion order), so the runtime uploads `slot.Deform` verbatim with no reordering |
+| TEXCOORD7 | Vector2 | (slotIndex, 0): the vertex's slot index in `SkeletonData.Slots` order, addressing the `_GpuSpineSlotColors` segment |
 
 Vertex order: static zone first (setup draw order), then every dynamic slot variant in
 (dynSlotId, variantId) order; `GpuSpineBakedEntry.DynamicVariants` records each variant's

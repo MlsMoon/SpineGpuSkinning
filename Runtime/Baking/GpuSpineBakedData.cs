@@ -62,10 +62,18 @@ namespace GpuSpine.Baking {
 	/// successor of the v1 runtime GpuSpinePrototype.
 	/// Vertex layout contract (consumed by the GPU skinning shader):
 	/// POSITION = local position of influence 0 (x, y) with z = zSpacing * setup draw order index,
-	/// TEXCOORD0 = atlas uv, COLOR = attachment color (alpha 0 for additive slots),
+	/// TEXCOORD0 = atlas uv, COLOR = attachment color with its raw alpha (additive slots no longer
+	/// bake alpha 0; the additive flag is a vertex attribute instead),
 	/// TEXCOORD1 = (vx1, vy1, vx2, vy2), TEXCOORD2 = (vx3, vy3),
 	/// TEXCOORD3 = 4 bone indices (integers stored as floats), TEXCOORD4 = 4 normalized weights,
-	/// TEXCOORD5 = (dynSlotId, variantId) for dynamic slot variant vertices, (-1, -1) for static ones.
+	/// TEXCOORD5 = (dynSlotId, variantId) for dynamic slot variant vertices, (-1, -1) for static ones,
+	/// TEXCOORD6 = (deformOffset, deformMode, additiveFlag): float2 index into the slot's segment of
+	/// the per-instance deform buffer, the deform application mode, and 1 for additive-blend slots;
+	/// (-1, -1, additiveFlag) for vertices of non-deform slots. deformMode 0 = absolute replacement
+	/// (unweighted attachment), 1 = offset add (weighted attachment; the vertex stores influence 0's
+	/// index and influence i reads deformOffset + i, relying on the per-influence deform elements
+	/// being consecutive in Vertices expansion order).
+	/// TEXCOORD7 = slot index of the vertex (float, SkeletonData.Slots order; -1 never occurs).
 	/// Static vertices come first in setup draw order; every dynamic slot variant (including the setup
 	/// state attachment) is appended after the static zone and recorded in
 	/// <see cref="DynamicVariants"/>. At runtime the instance selects one variant id per dynamic slot
@@ -95,8 +103,17 @@ namespace GpuSpine.Baking {
 		/// <summary>Total vertex count of the baked mesh (static zone + all dynamic variants).</summary>
 		public int VertexCount;
 		/// <summary>Number of dynamic slots of the skeleton (the DynSlotId domain size), regardless of
-		/// how many of them have variants in this combination.</summary>
 		public int DynamicSlotCount;
+		/// how many of them have variants in this combination.</summary>
+		/// <summary>Deform segment layout: one entry per deform slot (audit DeformSlots order), empty
+		/// when the skeleton has no deform timelines.</summary>
+		public GpuSpineDeformSlotEntry[] DeformSlots;
+		/// <summary>Total deform segment length per instance in float2 units (sum of slot capacities);
+		/// 0 when the skeleton has no deform slots (no deform buffer is created then).</summary>
+		public int DeformStride;
+		/// <summary>Number of slots of the skeleton (SkeletonData.Slots.Count): the per-instance slot
+		/// color segment length and the TEXCOORD7 domain.</summary>
+		public int SlotCount;
 	}
 
 	/// <summary>One submesh of a <see cref="GpuSpineBakedEntry"/>; equals one indirect draw batch.</summary>
@@ -135,5 +152,46 @@ namespace GpuSpine.Baking {
 		public int VertexStart;
 		/// <summary>Vertex count of this variant.</summary>
 		public int VertexCount;
-	}
+    }
+
+    /// <summary>
+    /// One deform slot's segment layout within a baked entry: the slot reserves Capacity float2
+    /// entries at Prefix of the per-instance deform segment. The runtime copies slot.Deform verbatim
+    /// into the segment (attachment-local float2 order: region corner-slot order, unweighted vertex
+    /// order, weighted influence-expansion order; the baked vertex deformOffset values index this
+    /// same order, so no runtime reordering is needed) or, when no deform is active, the current
+    /// attachment's DefaultValues.
+    /// </summary>
+    [Serializable]
+    public sealed class GpuSpineDeformSlotEntry {
+        /// <summary>Index of the slot within SkeletonData.Slots (setup draw order).</summary>
+        public int SlotIndex;
+        /// <summary>Name of the slot, for diagnostics and inspector display.</summary>
+        public string SlotName;
+        /// <summary>Reserved segment length in float2 units: the maximum DeformLength over the
+        /// slot's resolvable deform attachments.</summary>
+        public int Capacity;
+        /// <summary>Start of the slot's segment within the per-instance deform segment.</summary>
+        public int Prefix;
+        /// <summary>One entry per resolvable deform target attachment of the slot.</summary>
+        public GpuSpineDeformAttachmentInfo[] Attachments;
+    }
+
+    /// <summary>
+    /// Fallback deform content of one (slot, attachment) pair, used when no deform timeline has
+    /// written slot.Deform for the current attachment. Unweighted attachments: the attachment's local
+    /// vertex positions (region: the Offset corner-slot order; unweighted mesh: the Vertices order).
+    /// Weighted attachments: all zeros (deform values are per-influence offsets, so zero means
+    /// undeformed). Length == DeformLength float2 entries.
+    /// </summary>
+    [Serializable]
+    public sealed class GpuSpineDeformAttachmentInfo {
+        /// <summary>Attachment name (the runtime match key against Slot.Attachment.Name).</summary>
+        public string AttachmentName;
+        /// <summary>Deform data length in float2 units (unweighted: vertex count; weighted: total
+        /// influence count).</summary>
+        public int DeformLength;
+        /// <summary>Fallback values (see class summary), length == DeformLength.</summary>
+        public Vector2[] DefaultValues;
+    }
 }
