@@ -1,0 +1,55 @@
+using System;
+using System.Collections.Generic;
+
+namespace GpuSpine.Baking {
+	/// <summary>
+	/// Description of one dynamic slot: a slot whose visible attachment is switched at runtime by an
+	/// AttachmentTimeline. The baker pre-bakes every attachment variant of the slot into the prototype
+	/// (after the static vertex zone); the runtime folds the unselected variants per instance in the
+	/// vertex shader. A slot with no attachment set (timeline keyframe null) is the hidden state and is
+	/// expressed by folding all variants, so null never appears in <see cref="AttachmentNames"/>.
+	/// </summary>
+	[Serializable]
+	public sealed class GpuSpineDynamicSlotInfo {
+		/// <summary>Index of the slot within SkeletonData.Slots (setup draw order).</summary>
+		public int SlotIndex;
+		/// <summary>Name of the slot, for diagnostics and inspector display.</summary>
+		public string SlotName;
+		/// <summary>All attachment names registered for this slot across the default skin and every named
+		/// skin (ordinal sorted, deduplicated). This is the data-wide superset; a baked entry keeps only
+		/// the names resolvable through its effective skin (plus default skin fallback).</summary>
+		public string[] AttachmentNames;
+	}
+
+	/// <summary>
+	/// Serializable, graded result of auditing a <see cref="Spine.SkeletonData"/> for GPU baking
+	/// eligibility, stored on the baked-data container asset. Hard failures (deform timelines, slot
+	/// color timelines, attachment sequences, vertex count overflow) flip <see cref="Passed"/> to false
+	/// and block baking entirely. Tolerable deviations (draw order timelines, clipping attachments,
+	/// influence truncation) are demoted to <see cref="Warnings"/> and do not block baking.
+	/// </summary>
+	[Serializable]
+	public sealed class GpuSpineAuditReport {
+		/// <summary>True when no hard failure was found. Warnings never affect this flag.</summary>
+		public bool Passed;
+		/// <summary>Hard failure reasons (english), one entry per hit.</summary>
+		public List<string> Failures = new List<string>();
+		/// <summary>Tolerated deviations: draw order timelines, clipping attachments and influence
+		/// truncation notices appended during baking.</summary>
+		public List<string> Warnings = new List<string>();
+		/// <summary>True when any animation contains a DrawOrderTimeline. Tolerated: runtime draw order
+		/// changes may reorder overlapping attachments incorrectly against the baked setup order.</summary>
+		public bool HasDrawOrderTimeline;
+		/// <summary>True when any skin contains a ClippingAttachment. Tolerated: clipped regions render
+		/// unclipped on the GPU path.</summary>
+		public bool HasClipping;
+		/// <summary>Number of vertices with more than 4 bone influences that were fixed by truncation
+		/// (strongest 4 influences kept, weights renormalized) during baking. Filled by the baker, not
+		/// the auditor; the editor keeps the maximum across all baked entries (the same attachment
+		/// truncates identically in every combination containing it).</summary>
+		public int TruncatedVertexCount;
+		/// <summary>Slots driven by an AttachmentTimeline, ordered by slot index. Empty when the skeleton
+		/// has no attachment timelines.</summary>
+		public List<GpuSpineDynamicSlotInfo> DynamicSlots = new List<GpuSpineDynamicSlotInfo>();
+	}
+}

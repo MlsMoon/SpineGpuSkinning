@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Baking moved from runtime to the editor: an `AssetPostprocessor` audits and bakes every imported/updated `SkeletonDataAsset`; the container (`GpuSpineBakedData`: audit report + one entry per skin combination) and its entry meshes are stored as sub-assets of the `SkeletonDataAsset`. The runtime never bakes; a missing entry logs a warning and falls back to the CPU path.
+- `AttachmentTimeline` is no longer a hard failure: driven slots become dynamic slots, every attachment variant is pre-baked into the entry (vertices after the static zone, variant id in TEXCOORD5). At runtime each instance resolves one variant id per dynamic slot from `Slot.Attachment` (0xFFFFFFFF = fold all variants when the slot has no attachment or the name is not a baked variant) and uploads it through a per-batch `_GpuSpineDynSlots` structured buffer; the vertex shader folds unselected variant vertices to a single point (zero-area triangles, no fragments).
+- `GpuSkeletonRenderer` gained `AllowDrawOrderTimeline` / `IgnoreClipping` options: a hit draw-order-timeline or clipping warning now falls back to the CPU path unless the matching option allows the artifacts.
+- `DrawOrderTimeline` and `ClippingAttachment` demoted from hard failures to tolerated warnings.
+- Entry lookup keys are cross-session stable content hashes (`GpuSpineBakeKey`, FNV-1a over the per-slot resolved setup attachment names); skin combinations are declared on the container and baked via composite skins.
+
 ## [0.1.0] - 2026-09-03
 
 ### Added

@@ -16,11 +16,10 @@ GPU skinning for [spine-unity](http://esotericsoftware.com/spine-unity) Skeleton
 2. Select the GameObject that has your `SkeletonAnimation`.
 3. Add component → `Gpu Skeleton Renderer`.
 
-That is all. The component will:
+That is all. On import, every `SkeletonDataAsset` is audited and baked automatically in the editor; the baked container (audit report + one prototype mesh per skin combination) lives as a sub-asset of the `SkeletonDataAsset`. The component will:
 
-- audit the skeleton (animations, attachments, draw order);
-- switch it to GPU rendering if the audit passes — `updateMode` becomes `EverythingExceptMesh` and the `MeshRenderer` is disabled;
-- lazily bake a bind-pose prototype mesh per skin combination at runtime;
+- look up the editor-baked entry for the current skin combination (the runtime never bakes; a miss logs a warning and stays on the CPU path);
+- switch the skeleton to GPU rendering when an entry exists — `updateMode` becomes `EverythingExceptMesh` and the `MeshRenderer` is disabled;
 - export the 3x2 bone palette every frame after `UpdateComplete`;
 - submit it into per-atlas-page instanced batches automatically.
 
@@ -33,11 +32,13 @@ If the audit fails (see table below), the instance **silently stays on the CPU p
 | Feature detected | Behavior |
 |---|---|
 | Deform timeline | CPU fallback |
-| Attachment timeline | CPU fallback |
-| Draw order timeline | CPU fallback |
-| Slot alpha animated to 0 | CPU fallback |
+| Slot color timeline (RGBA / RGB / Alpha / RGBA2 / RGB2) | CPU fallback |
 | Texture sequence | CPU fallback |
-| Clipping attachment | CPU fallback |
+| No baked entry for the current skin combination | CPU fallback with a warning |
+| SkeletonRenderer.zSpacing ≠ baked zSpacing (0) | CPU fallback with a warning |
+| Attachment timeline | Supported (dynamic slots): every attachment variant of the slot is pre-baked; each instance selects one variant per slot, unselected variants are folded in the vertex shader |
+| Draw order timeline | CPU fallback with a warning, unless `AllowDrawOrderTimeline` is enabled on the component (possible overlap-order artifacts) |
+| Clipping attachment | CPU fallback with a warning, unless `IgnoreClipping` is enabled on the component (renders unclipped) |
 | Vertex influenced by > 4 bones | Weights truncated & renormalized with a warning |
 
 ## Custom shader integration
