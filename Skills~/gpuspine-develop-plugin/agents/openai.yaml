@@ -1,0 +1,4 @@
+interface:
+  display_name: "GpuSpine: Develop the Plugin"
+  short_description: "Maintain and extend the SpineGpuSkinning GPU skinning plugin."
+  default_prompt: "Please use $gpuspine-develop-plugin to complete the task."
