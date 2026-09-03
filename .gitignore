@@ -1,0 +1,12 @@
+# IDE / build artifacts
+.vs/
+.vscode/
+.idea/
+obj/
+Obj/
+*.csproj
+*.user
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,62 @@
+# SpineGpuSkinning
+
+GPU skinning for [spine-unity](http://esotericsoftware.com/spine-unity) SkeletonAnimation — moves the per-frame CPU skinning / mesh rebuild / vertex upload path to the GPU vertex shader, without modifying any Spine source code.
+
+> CPU keeps bone evaluation (AnimationState, mixing, events, physics, BoneFollower, runtime skinning). The GPU takes over vertex skinning, mesh assembly and vertex upload. Instances sharing an atlas page are drawn in one `DrawMeshInstancedIndirect` batch.
+
+## Requirements
+
+- Unity 2022.3+
+- Universal Render Pipeline (URP) 14
+- spine-unity **4.2** (spine-csharp 4.2) installed in the project. Spine runtimes are **not** bundled; you must install spine-unity yourself and comply with the [Spine Runtimes License](http://esotericsoftware.com/spine-runtimes-license).
+
+## Quick Start
+
+1. Copy the `SpineGpuSkinning` folder anywhere under your project's `Assets/` (e.g. `Assets/Plugins/`).
+2. Select the GameObject that has your `SkeletonAnimation`.
+3. Add component → `Gpu Skeleton Renderer`.
+
+That is all. The component will:
+
+- audit the skeleton (animations, attachments, draw order);
+- switch it to GPU rendering if the audit passes — `updateMode` becomes `EverythingExceptMesh` and the `MeshRenderer` is disabled;
+- lazily bake a bind-pose prototype mesh per skin combination at runtime;
+- export the 3x2 bone palette every frame after `UpdateComplete`;
+- submit it into per-atlas-page instanced batches automatically.
+
+Remove the component (or disable it) to fall back to the stock CPU rendering path — zero residue.
+
+If the audit fails (see table below), the instance **silently stays on the CPU path**. No action required.
+
+## Automatic CPU fallback rules
+
+| Feature detected | Behavior |
+|---|---|
+| Deform timeline | CPU fallback |
+| Attachment timeline | CPU fallback |
+| Draw order timeline | CPU fallback |
+| Slot alpha animated to 0 | CPU fallback |
+| Texture sequence | CPU fallback |
+| Clipping attachment | CPU fallback |
+| Vertex influenced by > 4 bones | Weights truncated & renormalized with a warning |
+
+## Custom shader integration
+
+Include `Runtime/Shaders/SpineGpuSkinning.hlsl` and call one function at the top of your vertex function. See `Skills~/gpuspine-use-plugin/references/integration-examples.md` for a complete example.
+
+## Custom RenderPass integration
+
+Enumerate live batches via the batch source API and re-submit them into your own render targets (mask RTs etc.). See `Skills~/gpuspine-use-plugin/references/integration-examples.md`.
+
+## Agent skills
+
+This repository ships two agent skills under `Skills~/`:
+
+- `gpuspine-use-plugin` — integration, fallback rules, troubleshooting.
+- `gpuspine-develop-plugin` — architecture, baking semantics, buffer layouts, verification workflow.
+
+Copy the skill folder(s) into your project's agent skill directory (e.g. `.agents/skills/`) to use them.
+
+## License
+
+MIT (see `LICENSE`). Spine runtimes remain under the Spine Runtimes License and are not part of this repository.
