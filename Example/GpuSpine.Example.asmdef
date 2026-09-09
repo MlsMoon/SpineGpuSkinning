@@ -1,0 +1,18 @@
+{
+    "name": "GpuSpine.Example",
+    "rootNamespace": "GpuSpine.Example",
+    "references": [
+        "GpuSpine.Runtime",
+        "spine-csharp",
+        "spine-unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

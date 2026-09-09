@@ -1,0 +1,24 @@
+{
+    "name": "GpuSpine.Example.Editor",
+    "rootNamespace": "GpuSpine.Example.Editor",
+    "references": [
+        "GpuSpine.Example",
+        "GpuSpine.Editor",
+        "GpuSpine.Runtime",
+        "spine-csharp",
+        "spine-unity",
+        "spine-unity-editor",
+        "Unity.RenderPipelines.Universal.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

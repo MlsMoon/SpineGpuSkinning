@@ -1,0 +1,215 @@
+SampleDude.png
+size: 512,512
+format: RGBA8888
+filter: Linear,Linear
+repeat: none
+default/head
+  rotate: false
+  xy: 4, 4
+  size: 96, 96
+  orig: 96, 96
+  offset: 0, 0
+  index: -1
+default/body
+  rotate: false
+  xy: 108, 4
+  size: 64, 72
+  orig: 64, 72
+  offset: 0, 0
+  index: -1
+default/upperarm
+  rotate: false
+  xy: 180, 4
+  size: 28, 40
+  orig: 28, 40
+  offset: 0, 0
+  index: -1
+default/forearm
+  rotate: false
+  xy: 216, 4
+  size: 26, 38
+  orig: 26, 38
+  offset: 0, 0
+  index: -1
+default/hand
+  rotate: false
+  xy: 250, 4
+  size: 26, 28
+  orig: 26, 28
+  offset: 0, 0
+  index: -1
+default/thigh
+  rotate: false
+  xy: 284, 4
+  size: 32, 44
+  orig: 32, 44
+  offset: 0, 0
+  index: -1
+default/shin
+  rotate: false
+  xy: 324, 4
+  size: 28, 42
+  orig: 28, 42
+  offset: 0, 0
+  index: -1
+default/foot
+  rotate: false
+  xy: 360, 4
+  size: 48, 28
+  orig: 48, 28
+  offset: 0, 0
+  index: -1
+default/pack
+  rotate: false
+  xy: 416, 4
+  size: 36, 52
+  orig: 36, 52
+  offset: 0, 0
+  index: -1
+default/accent
+  rotate: false
+  xy: 460, 4
+  size: 24, 34
+  orig: 24, 34
+  offset: 0, 0
+  index: -1
+forest/head
+  rotate: false
+  xy: 4, 108
+  size: 96, 96
+  orig: 96, 96
+  offset: 0, 0
+  index: -1
+forest/body
+  rotate: false
+  xy: 108, 108
+  size: 64, 72
+  orig: 64, 72
+  offset: 0, 0
+  index: -1
+forest/upperarm
+  rotate: false
+  xy: 180, 108
+  size: 28, 40
+  orig: 28, 40
+  offset: 0, 0
+  index: -1
+forest/forearm
+  rotate: false
+  xy: 216, 108
+  size: 26, 38
+  orig: 26, 38
+  offset: 0, 0
+  index: -1
+forest/hand
+  rotate: false
+  xy: 250, 108
+  size: 26, 28
+  orig: 26, 28
+  offset: 0, 0
+  index: -1
+forest/thigh
+  rotate: false
+  xy: 284, 108
+  size: 32, 44
+  orig: 32, 44
+  offset: 0, 0
+  index: -1
+forest/shin
+  rotate: false
+  xy: 324, 108
+  size: 28, 42
+  orig: 28, 42
+  offset: 0, 0
+  index: -1
+forest/foot
+  rotate: false
+  xy: 360, 108
+  size: 48, 28
+  orig: 48, 28
+  offset: 0, 0
+  index: -1
+forest/pack
+  rotate: false
+  xy: 416, 108
+  size: 36, 52
+  orig: 36, 52
+  offset: 0, 0
+  index: -1
+forest/accent
+  rotate: false
+  xy: 460, 108
+  size: 24, 34
+  orig: 24, 34
+  offset: 0, 0
+  index: -1
+midnight/head
+  rotate: false
+  xy: 4, 212
+  size: 96, 96
+  orig: 96, 96
+  offset: 0, 0
+  index: -1
+midnight/body
+  rotate: false
+  xy: 108, 212
+  size: 64, 72
+  orig: 64, 72
+  offset: 0, 0
+  index: -1
+midnight/upperarm
+  rotate: false
+  xy: 180, 212
+  size: 28, 40
+  orig: 28, 40
+  offset: 0, 0
+  index: -1
+midnight/forearm
+  rotate: false
+  xy: 216, 212
+  size: 26, 38
+  orig: 26, 38
+  offset: 0, 0
+  index: -1
+midnight/hand
+  rotate: false
+  xy: 250, 212
+  size: 26, 28
+  orig: 26, 28
+  offset: 0, 0
+  index: -1
+midnight/thigh
+  rotate: false
+  xy: 284, 212
+  size: 32, 44
+  orig: 32, 44
+  offset: 0, 0
+  index: -1
+midnight/shin
+  rotate: false
+  xy: 324, 212
+  size: 28, 42
+  orig: 28, 42
+  offset: 0, 0
+  index: -1
+midnight/foot
+  rotate: false
+  xy: 360, 212
+  size: 48, 28
+  orig: 48, 28
+  offset: 0, 0
+  index: -1
+midnight/pack
+  rotate: false
+  xy: 416, 212
+  size: 36, 52
+  orig: 36, 52
+  offset: 0, 0
+  index: -1
+midnight/accent
+  rotate: false
+  xy: 460, 212
+  size: 24, 34
+  orig: 24, 34
+  offset: 0, 0
+  index: -1

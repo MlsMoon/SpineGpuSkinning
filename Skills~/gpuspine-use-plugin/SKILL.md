@@ -104,6 +104,10 @@ Editor menus (selection of one or more `SkeletonDataAsset`):
 Host-project smoke tools should hang off `Tools/GPUSpineSkin/Temp`, not a separate
 top-level menu.
 
+The plugin ships a visible MIT example under `Example/`: original character
+`SampleDude` and `GpuSpineComparison.unity` (CPU left, GPU right). Rebuild with
+`Tools/GPUSpineSkin/Build Comparison Example`. This is not Esoteric Spineboy.
+
 ### Declaring skin combinations (DeclaredCombos)
 
 The bake set covers the default skin and every single skin automatically. **Composite

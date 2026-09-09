@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- `Docs/` translations of the README (`zh-Hans`, `ja`) with language links from the root README.
+- Visible `Example/` comparison: MIT `SampleDude` character and `GpuSpineComparison` CPU/GPU scene, rebuilt via `Tools/GPUSpineSkin/Build Comparison Example`.
+
 ### Changed
 
 - Editor menus now live under `Tools/GPUSpineSkin` (generic rebake / force rebake / audit / dump / inspect) with the existing `Assets/GpuSpine` Project context items kept as aliases. `Rebake` still respects the no-change fingerprint; `Force Rebake Selected` invalidates it. Project-local smoke tools should hang off `Tools/GPUSpineSkin/Temp` instead of a separate top-level menu.
