@@ -60,9 +60,9 @@ namespace GpuSpine.Example {
             GUI.color = Controller.ComplexRequested ? new Color(0.55f, 1f, 0.83f) : Color.white;
             if (GUI.Button(new Rect(630, 12, 185, 32), "Complex courier", m_button)) Controller.SetComplexCase(true);
             GUI.color = Controller.UltraRequested ? new Color(0.55f, 1f, 0.83f) : Color.white;
-            if (GUI.Button(new Rect(825, 12, 180, 32), "Ultra 100 bones", m_button)) Controller.SetUltraCase(true);
+            if (GUI.Button(new Rect(825, 12, 180, 32), "Production 300 cats", m_button)) Controller.SetProductionCase();
             GUI.color = oldColor;
-            GUI.Label(new Rect(575, 49, 380, 24), Controller.UltraRequested ? "100 bones / ~2490 vertices" : Controller.ComplexRequested
+            GUI.Label(new Rect(575, 49, 380, 24), Controller.UltraRequested ? (Controller.ProductionRequested ? "Production load / 100 bones / ~2490 vertices" : "100 bones / ~2490 vertices") : Controller.ComplexRequested
                 ? "48 bones / ~1170 vertices" : "20 bones / 159 vertices each", m_label);
             GUI.Label(new Rect(28, 49, 275, 24), m_mode, m_label);
             GUI.Label(new Rect(305, 49, 270, 24), m_active, m_label);

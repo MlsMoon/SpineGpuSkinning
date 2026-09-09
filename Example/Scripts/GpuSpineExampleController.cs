@@ -33,6 +33,7 @@ namespace GpuSpine.Example {
         bool m_requestedComplex;
         public bool ComplexRequested => m_requestedComplex;
         public bool UltraRequested { get; private set; }
+        public bool ProductionRequested { get; private set; }
         bool m_gpu;
         bool m_layoutDirty;
         bool m_initialized;
@@ -95,6 +96,7 @@ namespace GpuSpine.Example {
         public void SetComplexCase(bool complex) {
             m_requestedComplex = complex;
             UltraRequested = false;
+            ProductionRequested = false;
             CpuFps = GpuFps = 0;
             m_layoutDirty = true;
             ResetMeasurement();
@@ -103,6 +105,7 @@ namespace GpuSpine.Example {
         /// <summary>切换 100 骨骼超复杂案例，角色数不变。</summary>
         public void SetUltraCase(bool ultra) {
             UltraRequested = ultra;
+            ProductionRequested = ultra;
             m_requestedComplex = ultra;
             CpuFps = GpuFps = 0;
             m_layoutDirty = true;
@@ -121,6 +124,15 @@ namespace GpuSpine.Example {
             m_sampleTime = 0;
             Fps = FrameMilliseconds = 0;
             m_settleUntil = Time.unscaledTime + 1f;
+        }
+
+        /// <summary>生产猫负载：使用高复杂角色并固定 300 实例，专门用于观察 CPU Mesh 节省。</summary>
+        public void SetProductionCase() {
+            ProductionRequested = true;
+            UltraRequested = true;
+            m_requestedComplex = true;
+            SetCount(300);
+            ResetMeasurement();
         }
 
         void Update() {

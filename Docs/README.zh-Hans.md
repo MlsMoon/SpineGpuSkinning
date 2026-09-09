@@ -72,6 +72,8 @@
 核对 CPU 网格热点、渲染线程、GPU 时间、GC 和实际绘制批次。FPS 不能直接证明 CPU 占用降低。
 Editor Play Mode 可交互对照；正式性能结论应优先基于 Player，避免编辑器开销干扰。
 
+生产复现入口：Example 的 **Production 300 cats** 会使用高复杂案例并设置 300 个实例，专门放大 CPU Mesh 重建与顶点上传成本；它不是对真实猫的视觉替身，而是对骨骼、网格、Deform 和批次规模的可分发近似。
+
 ## Windows Player 对照结果
 
 在相同 Player、1280×720、相同正交相机、相同 UltraCourier 案例和 32 个角色下，实测一次：
