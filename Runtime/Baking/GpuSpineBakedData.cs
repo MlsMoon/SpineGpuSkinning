@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Spine.Unity;
 
 namespace GpuSpine.Baking {
 	/// <summary>
@@ -12,8 +13,17 @@ namespace GpuSpine.Baking {
 	/// looks entries up by content key and falls back to the CPU path on a miss.
 	/// </summary>
 	public sealed class GpuSpineBakedData : ScriptableObject {
+		public int FormatVersion;
+		public SkeletonDataAsset SourceAsset;
+		public Shader DefaultShader;
+		public bool IsCompatible => FormatVersion == GpuSpineBaker.BakeFormatVersion;
+
 		/// <summary>AssetDatabase GUID of the owning SkeletonDataAsset (editor-time bookkeeping).</summary>
 		public string SkeletonDataAssetGuid;
+		/// <summary>Display name of the owning SkeletonDataAsset, written at bake time. Runtime code
+		/// uses it to resolve the container without AssetDatabase (e.g. via a cached
+		/// Resources.FindObjectsOfTypeAll lookup).</summary>
+		public string SkeletonDataAssetName;
 		/// <summary>zSpacing the entries were baked with. Baking is fixed to 0 (v1 simplification): every
 		/// known skeleton uses 0, and a component whose SkeletonRenderer.zSpacing differs from this value
 		/// falls back to the CPU path with a warning.</summary>
@@ -114,6 +124,78 @@ namespace GpuSpine.Baking {
 		/// <summary>Number of slots of the skeleton (SkeletonData.Slots.Count): the per-instance slot
 		/// color segment length and the TEXCOORD7 domain.</summary>
 		public int SlotCount;
+		/// <summary>Distinct index layouts, including setup order. All layouts share baked vertices.</summary>
+		public GpuSpineDrawOrderLayout[] DrawOrderLayouts;
+		/// <summary>Maximum number of triangle vertices used by active clipping attachments.</summary>
+		public int ClipVertexCapacity;
+		public Bounds[] BoneBounds;
+		public bool[] UsedBones;
+		[NonSerialized] Dictionary<string, GpuSpineBakedEntry> orderedEntries;
+		[NonSerialized] GpuSpineBakedEntry runtimeOwner;
+		[NonSerialized] int runtimeUsers;
+		[NonSerialized] int lastUsedFrame;
+
+		public GpuSpineBakedEntry FindOrderedEntry (string orderKey) {
+			if (DrawOrderLayouts == null || DrawOrderLayouts.Length == 0) return null;
+			if (orderedEntries == null) orderedEntries = new Dictionary<string, GpuSpineBakedEntry>();
+			if (orderedEntries.TryGetValue(orderKey, out GpuSpineBakedEntry cached)) {
+				cached.lastUsedFrame = Time.frameCount;
+				return cached;
+			}
+			foreach (GpuSpineDrawOrderLayout layout in DrawOrderLayouts) {
+				if (layout.Key != orderKey || layout.Indices == null) continue;
+				EvictUnusedLayout();
+				GpuSpineBakedEntry entry = (GpuSpineBakedEntry)MemberwiseClone();
+				entry.Mesh = layout == DrawOrderLayouts[0] ? Mesh : UnityEngine.Object.Instantiate(Mesh);
+				if (entry.Mesh != Mesh) {
+					entry.Mesh.hideFlags = HideFlags.DontSave;
+					entry.Mesh.subMeshCount = layout.Submeshes.Length;
+					for (int i = 0; i < layout.Submeshes.Length; i++) {
+						GpuSpineSubmesh part = layout.Submeshes[i];
+						entry.Mesh.SetTriangles(layout.Indices, part.IndexStart, part.IndexCount, i, false, 0);
+					}
+				}
+				entry.Submeshes = layout.Submeshes;
+				entry.DrawOrderLayouts = null;
+				entry.orderedEntries = null;
+				entry.runtimeOwner = this;
+				entry.runtimeUsers = 0;
+				entry.lastUsedFrame = Time.frameCount;
+				orderedEntries.Add(orderKey, entry);
+				return entry;
+			}
+			return null;
+		}
+
+		public void RetainRuntimeLayout () { if (runtimeOwner != null) runtimeUsers++; }
+		public void ReleaseRuntimeLayout () { if (runtimeOwner != null) runtimeUsers--; }
+
+		void EvictUnusedLayout () {
+			if (orderedEntries.Count < 8) return;
+			string candidate = null;
+			int oldest = int.MaxValue;
+			foreach (var pair in orderedEntries) {
+				if (pair.Value.runtimeUsers == 0 && pair.Value.lastUsedFrame <= oldest) {
+					candidate = pair.Key; oldest = pair.Value.lastUsedFrame;
+				}
+			}
+			if (candidate == null) return;
+			DestroyRuntimeMesh(orderedEntries[candidate]);
+			orderedEntries.Remove(candidate);
+		}
+
+		void DestroyRuntimeMesh (GpuSpineBakedEntry entry) {
+			if (entry.Mesh == null || entry.Mesh == Mesh) return;
+			if (Application.isPlaying) UnityEngine.Object.Destroy(entry.Mesh);
+			else UnityEngine.Object.DestroyImmediate(entry.Mesh);
+		}
+
+		public void ClearRuntimeLayouts () {
+			if (orderedEntries == null) return;
+			foreach (GpuSpineBakedEntry entry in orderedEntries.Values) DestroyRuntimeMesh(entry);
+			orderedEntries.Clear();
+		}
+
 	}
 
 	/// <summary>One submesh of a <see cref="GpuSpineBakedEntry"/>; equals one indirect draw batch.</summary>

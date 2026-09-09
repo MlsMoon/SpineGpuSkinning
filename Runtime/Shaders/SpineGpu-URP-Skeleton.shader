@@ -11,6 +11,9 @@ Shader "GpuSpine/URP/Skeleton"
         _Color ("Tint", Color) = (1,1,1,1)
         _Cutoff ("Alpha Cutoff", Range(0,1)) = 0.1
         [Toggle(_ALPHATEST_ON)] _AlphaTest ("Alpha Test", Float) = 0
+        [Toggle(_STRAIGHT_ALPHA_INPUT)] _StraightAlphaInput ("Straight Alpha Texture", Float) = 0
+        [HideInInspector] _StencilRef ("Stencil Reference", Float) = 1
+        [HideInInspector] _StencilComp ("Stencil Comparison", Float) = 8
     }
 
     SubShader
@@ -29,93 +32,43 @@ Shader "GpuSpine/URP/Skeleton"
         ZWrite Off
         // Mirrored skeletons (negative ScaleX) flip triangle winding; culling must stay off.
         Cull Off
+        Stencil { Ref [_StencilRef] Comp [_StencilComp] Pass Keep }
+
+        HLSLINCLUDE
+        #include "SpineGpuURPCommon.hlsl"
+        ENDHLSL
 
         Pass
         {
             Name "ForwardUnlit"
-            Tags { "LightMode" = "UniversalForward" }
+            Tags { "LightMode" = "UniversalForwardOnly" }
 
             HLSLPROGRAM
             // StructuredBuffer and SV_InstanceID are available from target 3.5.
             #pragma target 3.5
             #pragma vertex GpuSpineVertex
+            #pragma multi_compile_instancing
             #pragma fragment GpuSpineFragment
             #pragma shader_feature_local _ALPHATEST_ON
+            #pragma shader_feature_local _STRAIGHT_ALPHA_INPUT
 
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-            #include "SpineGpuSkinning.hlsl"
-            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Color.hlsl"
+            ENDHLSL
+        }
 
-            struct Attributes
-            {
-                float3 positionOS : POSITION;   // influence 0 local (x, y) + baked z
-                float2 uv : TEXCOORD0;
-                float4 color : COLOR;
-                float4 influence12 : TEXCOORD1; // (vx1, vy1, vx2, vy2)
-                float2 influence3 : TEXCOORD2;  // (vx3, vy3)
-                float4 boneIndices : TEXCOORD3; // 4 bone indices, integers stored as floats
-                float4 boneWeights : TEXCOORD4; // 4 normalized weights
-                float2 dynInfo : TEXCOORD5;     // x = dynamic slot id (-1 = static), y = variant id
-                float3 deformInfo : TEXCOORD6;  // x = deform float2 index (-1 = none), y = mode (0 = replace, 1 = add), z = additive flag
-                float slotIndex : TEXCOORD7;    // slot index of the vertex (SkeletonData.Slots order)
-                uint instanceID : SV_InstanceID;
-            };
-
-            struct Varyings
-            {
-                float4 positionCS : SV_POSITION;
-                float2 uv : TEXCOORD0;
-                float4 color : COLOR;
-            };
-
-            TEXTURE2D(_MainTex);
-            SAMPLER(sampler_MainTex);
-
-            // NOTE: Do not ifdef the properties here as SRP batcher can not handle different layouts.
-            CBUFFER_START(UnityPerMaterial)
-                float4 _Color;
-                float _Cutoff;
-            CBUFFER_END
-
-            Varyings GpuSpineVertex(Attributes input)
-            {
-                Varyings output = (Varyings)0;
-
-                // GPU skinning: bind-pose vertex attributes -> skeleton space -> world space.
-                float3 positionWS = GpuSpineSkinToWorld(input.positionOS, input.influence12,
-                    input.influence3, input.boneIndices, input.boneWeights, input.dynInfo,
-                    input.deformInfo, input.instanceID);
-                output.positionCS = TransformWorldToHClip(positionWS);
-                output.uv = input.uv;
-
-                // Vertex color composition, 1:1 with the CPU path (MeshGenerator.cs:953-972):
-                // attachment COLOR x slot color x instance skeleton color x material tint, then
-                // premultiply rgb by the combined alpha (PMA).
-                float4 color = GpuSpineGetVertexColor(input.color, input.slotIndex, input.instanceID) * _Color;
-                float combinedAlpha = color.a;
-                if (input.deformInfo.z > 0.5)
-                    // Additive slot, linear color space: the CPU compensates the shader-side gamma
-                    // conversion (MeshGenerator.cs:667-670, under the project's
-                    // LINEAR_COLOR_SPACE_FIX_ADDITIVE_ALPHA define).
-                    combinedAlpha = LinearToSRGB(combinedAlpha);
-                color.rgb *= combinedAlpha;
-                if (input.deformInfo.z > 0.5)
-                    // PMA additive trick: straight rgb with alpha 0, so Blend One OneMinusSrcAlpha
-                    // adds the source fully (MeshGenerator.cs:955, 964-965).
-                    color.a = 0.0;
-                output.color = color;
-                return output;
-            }
-
-            half4 GpuSpineFragment(Varyings input) : SV_Target
-            {
-                half4 texel = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv);
-                half4 color = texel * input.color;
-                #ifdef _ALPHATEST_ON
-                clip(color.a - _Cutoff);
-                #endif
-                return color;
-            }
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+            Offset 1, 1
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma vertex GpuSpineShadowVertex
+            #pragma multi_compile_instancing
+            #pragma fragment GpuSpineShadowFragment
+            #pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
             ENDHLSL
         }
     }

@@ -25,7 +25,8 @@ SkeletonAnimation (unmodified Spine runtime)
   |    rebuild/upload path is skipped. MeshRenderer disabled as a second cut.
   v
   2. BAKING LAYER (editor only, one-shot) — Editor/GpuSpineBakeProcessor.cs,
-     Editor/GpuSpineBakerEditorUtility.cs, Runtime/Baking/GpuSpineAuditor.cs,
+     Editor/GpuSpineBakerEditorUtility.cs, Editor/GpuSpineEditorMenu.cs,
+     Runtime/Baking/GpuSpineAuditor.cs,
      Runtime/Baking/GpuSpineBaker.cs, Runtime/Baking/GpuSpineBakeKey.cs
      Audit -> bake one bind-pose prototype mesh per skin combination -> GpuSpineBakedData
      container as sub-asset of the SkeletonDataAsset; entry meshes hang off the container.
@@ -59,8 +60,9 @@ File map:
 | `Runtime/Baking/GpuSpineBakeKey.cs` | FNV-1a content key, shared by editor bake and runtime lookup |
 | `Runtime/Baking/GpuSpineBakedData.cs` | Container SO + entry/submesh/variant serializable types |
 | `Runtime/Baking/GpuSpineBakedRuntime.cs` | Runtime registry keyed by SkeletonDataAsset |
-| `Editor/GpuSpineBakeProcessor.cs` | AssetPostprocessor auto-bake + Assets/GpuSpine menus |
-| `Editor/GpuSpineBakerEditorUtility.cs` | Bake orchestration, persistence, no-change check, fingerprint |
+| `Editor/GpuSpineBakeProcessor.cs` | AssetPostprocessor auto-bake |
+| `Editor/GpuSpineBakerEditorUtility.cs` | Bake orchestration, persistence, no-change check, fingerprint, ForceRebake |
+| `Editor/GpuSpineEditorMenu.cs` | `Tools/GPUSpineSkin` generic menus + `Assets/GpuSpine` context aliases |
 | `Runtime/Shaders/SpineGpuSkinning.hlsl` | Skinning include: buffer declarations + `GpuSpineSkinToWorld` |
 | `Runtime/Shaders/SpineGpu-URP-Skeleton.shader` | Default URP unlit PMA shader `GpuSpine/URP/Skeleton` |
 
@@ -171,7 +173,7 @@ csc -nologo -target:library -nostdlib -noconfig ^
   -r:"%UNITY_MANAGED%\NetStandard\ref\2.1.0\netstandard.dll" ^
   -r:%TEMP%\GpuSpine.Runtime.dll ^
   -out:%TEMP%\GpuSpine.Editor.dll ^
-  Editor\GpuSpineBakeProcessor.cs Editor\GpuSpineBakerEditorUtility.cs
+  Editor\GpuSpineBakeProcessor.cs Editor\GpuSpineBakerEditorUtility.cs Editor\GpuSpineEditorMenu.cs
 ```
 
 Exact UnityEngine module DLL layout varies by editor version — let Unity compile once,

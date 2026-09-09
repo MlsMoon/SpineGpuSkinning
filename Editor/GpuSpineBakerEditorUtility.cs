@@ -72,7 +72,11 @@ namespace GpuSpine.Editor {
 			if (!containerIsNew && IsUpToDate(container, guid, fingerprint, targets))
 				return container; // Nothing changed; no save, so the import loop terminates here.
 
+			container.FormatVersion = GpuSpineBaker.BakeFormatVersion;
+			container.SourceAsset = asset;
+			container.DefaultShader = Shader.Find("GpuSpine/URP/Skeleton");
 			container.SkeletonDataAssetGuid = guid;
+			container.SkeletonDataAssetName = asset.name;
 			container.BakedZSpacing = BakedZSpacing;
 			container.SourceFingerprint = fingerprint;
 			container.Audit = audit;
@@ -91,6 +95,7 @@ namespace GpuSpine.Editor {
 				GpuSpineBakedEntry entry = GpuSpineBaker.Bake(data, target.SkinNames, BakedZSpacing, entryReport);
 				entry.DisplayName = target.DisplayName;
 				MergeEntryReport(audit, entryReport, seededFailures, seededWarnings);
+				GpuSpineOrderBaker.Bake(data, entry);
 				entries.Add(entry);
 			}
 			container.Entries = entries;
@@ -100,6 +105,11 @@ namespace GpuSpine.Editor {
 			for (int i = 0; i < entries.Count; i++) {
 				Mesh mesh = entries[i].Mesh;
 				if (mesh != null) AssetDatabase.AddObjectToAsset(mesh, container);
+				GpuSpineDrawOrderLayout[] layouts = entries[i].DrawOrderLayouts;
+				if (layouts != null) {
+					foreach (GpuSpineDrawOrderLayout layout in layouts)
+						if (layout.Mesh != null && layout.Mesh != mesh) AssetDatabase.AddObjectToAsset(layout.Mesh, container);
+				}
 			}
 			EditorUtility.SetDirty(container);
 			EditorUtility.SetDirty(asset);
@@ -109,6 +119,22 @@ namespace GpuSpine.Editor {
 				+ (audit.DynamicSlots.Count > 0 ? ", " + audit.DynamicSlots.Count + " dynamic slot(s)" : "")
 				+ (audit.Warnings.Count > 0 ? ", " + audit.Warnings.Count + " warning(s)" : "") + ".", asset);
 			return container;
+		}
+
+		/// <summary>
+		/// Invalidates the source fingerprint so the no-change check cannot skip, then rebakes.
+		/// Use this when the baked meshes were deleted by hand or the fingerprint missed a content
+		/// change that preserved file length and write time.
+		/// </summary>
+		public static GpuSpineBakedData ForceRebake (SkeletonDataAsset asset) {
+			if (asset == null) throw new ArgumentNullException("asset");
+			string path = AssetDatabase.GetAssetPath(asset);
+			GpuSpineBakedData container = FindContainer(path);
+			if (container != null) {
+				container.SourceFingerprint = string.Empty;
+				EditorUtility.SetDirty(container);
+			}
+			return Rebake(asset);
 		}
 
 		/// <summary>
@@ -168,7 +194,16 @@ namespace GpuSpine.Editor {
 		/// a bake-time hard failure and count as up to date; use the manual Rebake menu to repair
 		/// manually deleted meshes.
 		/// </summary>
+		public static bool IsCurrent(GpuSpineBakedData container) {
+			if (container == null || !container.IsCompatible || container.SourceAsset == null) return false;
+			SkeletonDataAsset asset = container.SourceAsset;
+			string path = AssetDatabase.GetAssetPath(asset);
+			var targets = CollectTargets(asset.GetSkeletonData(true), container.Audit, container);
+			return IsUpToDate(container, AssetDatabase.AssetPathToGUID(path), ComputeSourceFingerprint(asset, path), targets);
+		}
+
 		static bool IsUpToDate (GpuSpineBakedData container, string guid, string fingerprint, List<BakeTarget> targets) {
+			if (!container.IsCompatible || container.SourceAsset == null || container.DefaultShader == null) return false;
 			if (container.SkeletonDataAssetGuid != guid) return false;
 			if (container.SourceFingerprint != fingerprint) return false;
 			HashSet<string> uniqueKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -187,6 +222,14 @@ namespace GpuSpine.Editor {
 			if (entries != null) {
 				for (int i = 0; i < entries.Count; i++) {
 					Mesh mesh = entries[i] != null ? entries[i].Mesh : null;
+					GpuSpineDrawOrderLayout[] layouts = entries[i]?.DrawOrderLayouts;
+					if (layouts != null) {
+						foreach (GpuSpineDrawOrderLayout layout in layouts) {
+							if (layout.Mesh == null || layout.Mesh == mesh) continue;
+							AssetDatabase.RemoveObjectFromAsset(layout.Mesh);
+							UnityEngine.Object.DestroyImmediate(layout.Mesh);
+						}
+					}
 					if (mesh == null) continue;
 					AssetDatabase.RemoveObjectFromAsset(mesh);
 					UnityEngine.Object.DestroyImmediate(mesh);
@@ -228,7 +271,7 @@ namespace GpuSpine.Editor {
 				audit.TruncatedVertexCount = entryReport.TruncatedVertexCount;
 		}
 
-		static GpuSpineBakedData FindContainer (string path) {
+		public static GpuSpineBakedData FindContainer (string path) {
 			UnityEngine.Object[] subAssets = AssetDatabase.LoadAllAssetRepresentationsAtPath(path);
 			for (int i = 0; i < subAssets.Length; i++) {
 				GpuSpineBakedData container = subAssets[i] as GpuSpineBakedData;

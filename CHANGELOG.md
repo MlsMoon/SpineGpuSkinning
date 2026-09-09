@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Editor menus now live under `Tools/GPUSpineSkin` (generic rebake / force rebake / audit / dump / inspect) with the existing `Assets/GpuSpine` Project context items kept as aliases. `Rebake` still respects the no-change fingerprint; `Force Rebake Selected` invalidates it. Project-local smoke tools should hang off `Tools/GPUSpineSkin/Temp` instead of a separate top-level menu.
+
 ### Added
 
 - `DeformTimeline` (free-form deformation) support, end to end: the audit collects deform slots instead of failing; the baker emits TEXCOORD6 `(deformOffset, deformMode)` plus a per-entry deform segment layout (`GpuSpineDeformSlotEntry`/`GpuSpineDeformAttachmentInfo`, `DeformStride`); the component uploads `slot.Deform` (or the attachment's baked `DefaultValues`) per frame through a new `_GpuSpineDeform` structured buffer; the vertex shader applies the deform data to each influence's local coordinate before the bone weighting (absolute for unweighted attachments, per-influence offsets for weighted meshes). The editor source fingerprint now mixes in `GpuSpineBaker.BakeFormatVersion` so baked-layout changes rebuild stale containers automatically.

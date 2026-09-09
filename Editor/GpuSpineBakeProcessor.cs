@@ -1,7 +1,4 @@
 using System;
-using System.Text;
-using GpuSpine.Baking;
-using Spine;
 using Spine.Unity;
 using UnityEditor;
 using UnityEngine;
@@ -34,56 +31,6 @@ namespace GpuSpine.Editor {
 					rebaking = false;
 				}
 			}
-		}
-
-		[MenuItem("Assets/GpuSpine/Rebake Skeleton Data", true)]
-		static bool ValidateRebakeSelected () {
-			return Selection.GetFiltered<SkeletonDataAsset>(SelectionMode.Assets).Length > 0;
-		}
-
-		/// <summary>Manually rebakes every selected SkeletonDataAsset (also repairs containers whose
-		/// entry meshes were deleted by hand).</summary>
-		[MenuItem("Assets/GpuSpine/Rebake Skeleton Data")]
-		static void RebakeSelected () {
-			SkeletonDataAsset[] assets = Selection.GetFiltered<SkeletonDataAsset>(SelectionMode.Assets);
-			for (int i = 0; i < assets.Length; i++) GpuSpineBakerEditorUtility.Rebake(assets[i]);
-		}
-
-		[MenuItem("Assets/GpuSpine/Log Audit Report", true)]
-		static bool ValidateLogAuditSelected () {
-			return Selection.GetFiltered<SkeletonDataAsset>(SelectionMode.Assets).Length > 0;
-		}
-
-		/// <summary>Audits every selected SkeletonDataAsset and logs the graded report details
-		/// (failures, warnings, dynamic slots and their variants) without baking.</summary>
-		[MenuItem("Assets/GpuSpine/Log Audit Report")]
-		static void LogAuditSelected () {
-			SkeletonDataAsset[] assets = Selection.GetFiltered<SkeletonDataAsset>(SelectionMode.Assets);
-			for (int i = 0; i < assets.Length; i++) {
-				SkeletonDataAsset asset = assets[i];
-				GpuSpineAuditReport audit = GpuSpineAuditor.Audit(asset.GetSkeletonData(true));
-				Debug.Log(FormatAuditReport(asset, audit), asset);
-			}
-		}
-
-		static string FormatAuditReport (SkeletonDataAsset asset, GpuSpineAuditReport audit) {
-			StringBuilder builder = new StringBuilder();
-			builder.Append("GpuSpine audit of '").Append(asset.name).Append("': ")
-				.Append(audit.Passed ? "PASSED" : "FAILED")
-				.Append(", drawOrderTimeline=").Append(audit.HasDrawOrderTimeline)
-				.Append(", clipping=").Append(audit.HasClipping)
-				.Append(", dynamicSlots=").Append(audit.DynamicSlots.Count);
-			for (int i = 0; i < audit.Failures.Count; i++)
-				builder.Append("\n  FAILURE: ").Append(audit.Failures[i]);
-			for (int i = 0; i < audit.Warnings.Count; i++)
-				builder.Append("\n  WARNING: ").Append(audit.Warnings[i]);
-			for (int i = 0; i < audit.DynamicSlots.Count; i++) {
-				GpuSpineDynamicSlotInfo info = audit.DynamicSlots[i];
-				builder.Append("\n  dynamic slot '").Append(info.SlotName).Append("' (#").Append(info.SlotIndex)
-					.Append("), ").Append(info.AttachmentNames.Length).Append(" variant(s): ")
-					.Append(string.Join(", ", info.AttachmentNames));
-			}
-			return builder.ToString();
 		}
 	}
 }

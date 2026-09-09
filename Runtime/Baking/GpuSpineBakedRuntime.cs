@@ -19,9 +19,32 @@ namespace GpuSpine.Baking {
 	public static class GpuSpineBakedRuntime {
 		static readonly Dictionary<SkeletonDataAsset, GpuSpineBakedData> registry = new Dictionary<SkeletonDataAsset, GpuSpineBakedData>();
 
+		static readonly Dictionary<GpuSpineBakedData, int> leases = new Dictionary<GpuSpineBakedData, int>();
+
 		[RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
 		static void ResetStatics () {
-			registry.Clear();
+			ClearRuntimeLayouts();
+			registry.Clear(); leases.Clear();
+		}
+
+		public static void ClearRuntimeLayouts () {
+			foreach (GpuSpineBakedData container in leases.Keys) ClearLayouts(container);
+			foreach (GpuSpineBakedData container in registry.Values) ClearLayouts(container);
+		}
+
+		static void ClearLayouts(GpuSpineBakedData container) {
+				if (container == null) return;
+				foreach (GpuSpineBakedEntry entry in container.Entries) entry.ClearRuntimeLayouts();
+		}
+
+		internal static void Retain(GpuSpineBakedData data) {
+			leases.TryGetValue(data, out int count); leases[data] = count + 1;
+		}
+
+		internal static void Release(GpuSpineBakedData data) {
+			if (data == null || !leases.TryGetValue(data, out int count)) return;
+			if (count > 1) { leases[data] = count - 1; return; }
+			leases.Remove(data); ClearLayouts(data);
 		}
 
 		/// <summary>Registers (or replaces) the baked data container of a skeleton data asset.</summary>
@@ -37,7 +60,11 @@ namespace GpuSpine.Baking {
 				data = null;
 				return false;
 			}
-			return registry.TryGetValue(asset, out data);
+			if (registry.TryGetValue(asset, out data)) return true;
+			foreach (var leased in leases.Keys) {
+				if (leased != null && leased.SourceAsset == asset) { data = leased; return true; }
+			}
+			return false;
 		}
 
 		/// <summary>Removes the registration of a skeleton data asset (no-op when not registered).</summary>
@@ -53,6 +80,8 @@ namespace GpuSpine.Baking {
 		/// whose Skin is a composite built via Skin.AddSkin in the same order as the declared
 		/// combination resolves to the combination's entry.
 		/// </summary>
+		public static ulong ComputeRuntimeHash(Skeleton skeleton) => GpuSpineBakeKey.ComputeHash(skeleton.Data, skeleton.Skin);
+
 		public static string ComputeRuntimeKey (Skeleton skeleton) {
 			if (skeleton == null) throw new ArgumentNullException("skeleton");
 			return GpuSpineBakeKey.Compute(skeleton.Data, skeleton.Skin);

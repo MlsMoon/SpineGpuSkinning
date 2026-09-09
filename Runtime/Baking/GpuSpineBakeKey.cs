@@ -1,5 +1,5 @@
 using System;
-using System.Text;
+using System.Globalization;
 using Spine;
 
 namespace GpuSpine.Baking {
@@ -24,12 +24,14 @@ namespace GpuSpine.Baking {
 		/// <param name="data">The skeleton data (shared by all instances of the same asset).</param>
 		/// <param name="effectiveSkin">The effective skin (may be a composite Skin built via AddSkin),
 		/// or null to resolve through the default skin only.</param>
-		public static string Compute (SkeletonData data, Skin effectiveSkin) {
+		public static string Compute (SkeletonData data, Skin effectiveSkin) => ComputeHash(data, effectiveSkin).ToString("X16", CultureInfo.InvariantCulture);
+
+		public static ulong ComputeHash (SkeletonData data, Skin effectiveSkin) {
 			if (data == null) throw new ArgumentNullException("data");
 			Skin defaultSkin = data.DefaultSkin;
 			SlotData[] slots = data.Slots.Items;
 			int count = data.Slots.Count;
-			StringBuilder stream = new StringBuilder(count * 16);
+			ulong hash = OffsetBasis;
 			for (int i = 0; i < count; i++) {
 				Attachment attachment = null;
 				string attachmentName = slots[i].AttachmentName;
@@ -37,19 +39,19 @@ namespace GpuSpine.Baking {
 					if (effectiveSkin != null) attachment = effectiveSkin.GetAttachment(i, attachmentName);
 					if (attachment == null && defaultSkin != null) attachment = defaultSkin.GetAttachment(i, attachmentName);
 				}
-				stream.Append(i);
-				stream.Append(':');
-				stream.Append(attachment != null ? attachment.Name : "~null");
-				stream.Append(';');
+				AppendIndex(ref hash, i);
+				Append(ref hash, ':');
+				string name = attachment != null ? attachment.Name : "~null";
+				foreach (char character in name) Append(ref hash, character);
+				Append(ref hash, ';');
 			}
-			unchecked {
-				ulong hash = OffsetBasis;
-				for (int i = 0, n = stream.Length; i < n; i++) {
-					hash ^= stream[i];
-					hash *= Prime;
-				}
-				return hash.ToString("X16");
-			}
+			return hash;
+		}
+		static void Append(ref ulong hash, char value) => hash = unchecked((hash ^ value) * Prime);
+
+		static void AppendIndex(ref ulong hash, int value) {
+			if (value >= 10) AppendIndex(ref hash, value / 10);
+			Append(ref hash, (char)('0' + value % 10));
 		}
 	}
 }

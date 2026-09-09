@@ -1,6 +1,17 @@
 #ifndef GPU_SPINE_SKINNING_INCLUDED
 #define GPU_SPINE_SKINNING_INCLUDED
 
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Color.hlsl"
+
+#define GPU_SPINE_VERTEX_CHANNELS \
+    float4 influence12 : TEXCOORD1; \
+    float2 influence3 : TEXCOORD2; \
+    float4 boneIndices : TEXCOORD3; \
+    float4 boneWeights : TEXCOORD4; \
+    float2 dynInfo : TEXCOORD5; \
+    float3 deformInfo : TEXCOORD6; \
+    float slotIndex : TEXCOORD7;
+
 // GPU skinning data channel for Spine indirect draw batches (DrawMeshInstancedIndirect).
 // Third-party shaders include this file and call GpuSpineSkinToWorld() as the first line of their
 // vertex function; the buffers are bound at material level by the runtime (GpuSpine.Core.GpuSpineBatch).
@@ -16,12 +27,12 @@ struct GpuBoneMatrix
     float2 row2;
 };
 
-// Mirror of GpuSpine.Core.GpuSpineInstanceData (C#: Matrix4x4 + 3 x Vector4, 112 bytes,
-// LayoutKind.Sequential). row_major matches the byte order of UnityEngine.Matrix4x4, so
-// mul(localToWorld, pos) applies the C# matrix as-is.
+// Explicit affine rows avoid matrix packing differences. Six float4 fields, 96 bytes.
 struct GpuSpineInstanceData
 {
-    row_major float4x4 localToWorld;
+    float4 localToWorldRow0;
+    float4 localToWorldRow1;
+    float4 localToWorldRow2;
     float4 color;
     float4 custom0;
     float4 custom1;
@@ -31,6 +42,13 @@ struct GpuSpineInstanceData
 StructuredBuffer<GpuBoneMatrix> _GpuSpineBones;
 // Per-instance draw data, layout [instanceID].
 StructuredBuffer<GpuSpineInstanceData> _GpuSpineInstances;
+
+float4x4 GpuSpineGetLocalToWorld(uint instanceID)
+{
+    GpuSpineInstanceData data = _GpuSpineInstances[instanceID];
+    return float4x4(data.localToWorldRow0, data.localToWorldRow1,
+        data.localToWorldRow2, float4(0, 0, 0, 1));
+}
 // Bone count per instance (palette stride).
 uint _GpuSpineBoneCount;
 // Number of dynamic slots per instance (0 when the baked entry has none: _GpuSpineDynSlots is
@@ -59,6 +77,46 @@ uint _GpuSpineSlotCount;
 // for slot color timelines, so timeline-driven colors arrive here for free.
 StructuredBuffer<float4> _GpuSpineSlotColors;
 
+// Instance visibility filter for per-instance resubmission (e.g. interactive masks): when not
+// 0xFFFFFFFF, every instance whose instanceID differs folds to the origin. Left unbound by the
+// runtime (reads 0 on D3D11), so resubmitting passes must always set it explicitly.
+uint _GpuSpineInstanceFilter;
+uint _GpuSpineInstanceOffset;
+
+uint GpuSpineResolveInstanceID(uint drawInstanceID)
+{
+    return drawInstanceID + _GpuSpineInstanceOffset;
+}
+
+uint _GpuSpineClipStride;
+StructuredBuffer<float2> _GpuSpineClipVertices;
+StructuredBuffer<float2> _GpuSpineClipRanges;
+
+float GpuSpineCross2(float2 a, float2 b)
+{
+    return a.x * b.y - a.y * b.x;
+}
+
+void GpuSpineClip(float2 positionSS, float slotIndex, uint instanceID)
+{
+    if (_GpuSpineClipStride == 0) return;
+    float2 range = _GpuSpineClipRanges[instanceID * _GpuSpineSlotCount + (uint)slotIndex];
+    if (range.y == 0) return;
+    uint start = instanceID * _GpuSpineClipStride + (uint)range.x;
+    for (uint triangleIndex = 0; triangleIndex < (uint)range.y; triangleIndex++)
+    {
+        uint index = start + triangleIndex * 3;
+        float2 a = _GpuSpineClipVertices[index];
+        float2 b = _GpuSpineClipVertices[index + 1];
+        float2 c = _GpuSpineClipVertices[index + 2];
+        float3 sides = float3(GpuSpineCross2(b - a, positionSS - a),
+            GpuSpineCross2(c - b, positionSS - b), GpuSpineCross2(a - c, positionSS - c));
+        if (abs(GpuSpineCross2(b - a, c - a)) > 1e-12 &&
+            (all(sides >= 0) || all(sides <= 0))) return;
+    }
+    clip(-1);
+}
+
 // Applies one bone's 2D affine matrix: wx = vx * a + vy * b + worldX ; wy = vx * c + vy * d + worldY.
 float2 GpuSpineApplyBoneMatrix(GpuBoneMatrix bone, float2 localPos)
 {
@@ -77,6 +135,10 @@ float2 GpuSpineApplyBoneMatrix(GpuBoneMatrix bone, float2 localPos)
 // z = additive-blend flag, consumed by the color composition in the shader, not here).
 float3 GpuSpineSkinPosition(float3 positionOS, float4 influence12, float2 influence3, float4 boneIndices, float4 boneWeights, float2 dynInfo, float3 deformInfo, uint instanceID)
 {
+    // Per-instance resubmission filter: instances outside the filter fold to the origin, so a
+    // shared batch can be redrawn for one instance only (the whole triangle degenerates).
+    if (_GpuSpineInstanceFilter != 0xFFFFFFFF && _GpuSpineInstanceFilter != instanceID)
+        return float3(0.0, 0.0, 0.0);
     // Dynamic slot folding: a vertex of an unselected variant collapses to the origin. All three
     // vertices of its triangle fold to the same point, the triangle degenerates to zero area and
     // produces no fragments. Static vertices (dynInfo.x = -1) skip the lookup.
@@ -125,7 +187,7 @@ float3 GpuSpineSkinPosition(float3 positionOS, float4 influence12, float2 influe
 float3 GpuSpineSkinToWorld(float3 positionOS, float4 influence12, float2 influence3, float4 boneIndices, float4 boneWeights, float2 dynInfo, float3 deformInfo, uint instanceID)
 {
     float3 skeletonPos = GpuSpineSkinPosition(positionOS, influence12, influence3, boneIndices, boneWeights, dynInfo, deformInfo, instanceID);
-    return mul(_GpuSpineInstances[instanceID].localToWorld, float4(skeletonPos, 1.0)).xyz;
+    return mul(GpuSpineGetLocalToWorld(instanceID), float4(skeletonPos, 1.0)).xyz;
 }
 
 // Per-instance skeleton color (skeleton.R/G/B/A).
@@ -144,6 +206,15 @@ float4 GpuSpineGetVertexColor(float4 attachmentColor, float slotIndex, uint inst
     if (_GpuSpineSlotCount > 0 && slotIndex > -0.5)
         c *= _GpuSpineSlotColors[instanceID * _GpuSpineSlotCount + (uint)slotIndex];
     return c * _GpuSpineInstances[instanceID].color;
+}
+
+// Shared premultiplied vertex-color composition, including additive slot alpha.
+float4 GpuSpinePremultiplyColor(float4 color, float additiveFlag)
+{
+    float alpha = additiveFlag > 0.5 ? LinearToSRGB(color.a) : color.a;
+    color.rgb *= alpha;
+    if (additiveFlag > 0.5) color.a = 0;
+    return color;
 }
 
 // Per-instance extension slot 0, filled via the GpuSpineInstanceDataWriter callback.

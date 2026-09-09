@@ -27,6 +27,20 @@ Remove the component (or disable it) to fall back to the stock CPU rendering pat
 
 If the audit fails (see table below), the instance **silently stays on the CPU path**. No action required.
 
+## Editor menus
+
+All generic tools hang under **`Tools/GPUSpineSkin`**. They operate on the selected `SkeletonDataAsset`(s):
+
+| Menu | What it does |
+|---|---|
+| `Tools/GPUSpineSkin/Rebake Selected` | Rebake if the source fingerprint or entry keys changed. |
+| `Tools/GPUSpineSkin/Force Rebake Selected` | Clear the fingerprint and rebuild even when the no-change check would skip. |
+| `Tools/GPUSpineSkin/Log Audit Report` | Log the graded audit without baking. |
+| `Tools/GPUSpineSkin/Dump Baked Data` | Log the container, entries and declared combos. |
+| `Tools/GPUSpineSkin/Inspect Default Shader` | Log compile status of `GpuSpine/URP/Skeleton`. |
+
+The same Rebake / Audit commands also appear as Project context items under `Assets/GpuSpine/` when a `SkeletonDataAsset` is selected. Host-project smoke tools should use `Tools/GPUSpineSkin/Temp/...`, not a separate top-level menu.
+
 ## Automatic CPU fallback rules
 
 | Feature detected | Behavior |

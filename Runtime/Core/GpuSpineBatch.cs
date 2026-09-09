@@ -19,7 +19,7 @@ namespace GpuSpine.Core {
 		/// <summary>The cloned batch material with the GPU skinning shader and the bound buffers.</summary>
 		public Material Material;
 		/// <summary>uint[5] indirect args buffer (indexCount, instanceCount, indexStart, baseVertex, 0).</summary>
-		public ComputeBuffer ArgsBuffer;
+		public GraphicsBuffer ArgsBuffer;
 		/// <summary>World-space union bounds of all submitted instances.</summary>
 		public Bounds Bounds;
 		/// <summary>Number of submitted instances this frame.</summary>
@@ -53,11 +53,12 @@ namespace GpuSpine.Core {
 		readonly List<GpuSkeletonRenderer> instances = new List<GpuSkeletonRenderer>();
 		readonly List<GpuSkeletonRenderer> submission = new List<GpuSkeletonRenderer>();
 		readonly uint[] argsArray = new uint[5];
+		readonly Dictionary<ulong, GpuSpineDrawSlice> slices = new Dictionary<ulong, GpuSpineDrawSlice>();
 
 		Material material;
 		ComputeBuffer paletteBuffer;   // GpuBoneMatrix[instanceCapacity * boneCount]
 		ComputeBuffer instanceBuffer;  // GpuSpineInstanceData[instanceCapacity]
-		ComputeBuffer argsBuffer;      // uint[5] indirect args
+		GraphicsBuffer argsBuffer;      // uint[5] indirect args
 		ComputeBuffer dynSlotBuffer;   // uint[instanceCapacity * dynamicSlotCount], null for static-only entries
 		ComputeBuffer deformBuffer;    // float2[instanceCapacity * deformStride], null for deform-less entries
 		ComputeBuffer slotColorBuffer; // float4[instanceCapacity * slotCount], null for slot-less entries
@@ -66,6 +67,11 @@ namespace GpuSpine.Core {
 		uint[] dynSlotStaging;
 		Vector2[] deformStaging;
 		Vector4[] slotColorStaging;
+		ComputeBuffer clipVertexBuffer, clipRangeBuffer;
+		Vector2[] clipVertexStaging, clipRangeStaging;
+		ulong[] clipVersions;
+		GpuSkeletonRenderer[] uploadedSources;
+		ulong[] paletteVersions, dynamicVersions, deformVersions, colorVersions;
 		int instanceCapacity;
 		int membershipVersion;
 		int uploadedMembershipVersion = -1;
@@ -76,7 +82,7 @@ namespace GpuSpine.Core {
 			Entry = entry;
 			SubmeshIndex = submeshIndex;
 			material = batchMaterial;
-			argsBuffer = new ComputeBuffer(1, argsArray.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
+			argsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, 1, GraphicsBuffer.IndirectDrawIndexedArgs.size);
 			GpuSpineSubmesh submesh = entry.Submeshes[submeshIndex];
 			argsArray[0] = (uint)submesh.IndexCount;   // index count per instance
 			argsArray[1] = 0;                          // instance count, updated per frame
@@ -93,9 +99,26 @@ namespace GpuSpine.Core {
 		/// <summary>The cloned batch material.</summary>
 		public Material Material { get { return material; } }
 		/// <summary>The uint[5] indirect args buffer.</summary>
-		public ComputeBuffer ArgsBuffer { get { return argsBuffer; } }
+		public GraphicsBuffer ArgsBuffer { get { return argsBuffer; } }
 		/// <summary>World-space union bounds of the last submitted frame.</summary>
 		public Bounds Bounds { get { return bounds; } }
+
+		public int FindSourceIndex (GpuSkeletonRenderer source) => submission.IndexOf(source);
+
+		public GpuSpineBatchInfo GetSlice (int start, int count) {
+			ulong key = ((ulong)(uint)start << 32) | (uint)count;
+			if (!slices.TryGetValue(key, out GpuSpineDrawSlice slice)) {
+				slice = new GpuSpineDrawSlice(material, argsArray, start);
+				BindBuffers(slice.Material);
+				slices.Add(key, slice);
+			}
+			slice.SetCount(count);
+			return new GpuSpineBatchInfo {
+				Mesh = Entry.Mesh, SubmeshIndex = SubmeshIndex,
+				Material = slice.Material, ArgsBuffer = slice.Args,
+				Bounds = ComputeBounds(start, count), InstanceCount = count
+			};
+		}
 
 		public void Add (GpuSkeletonRenderer renderer) {
 			instances.Add(renderer);
@@ -112,11 +135,14 @@ namespace GpuSpine.Core {
 		/// args buffer and submits Graphics.DrawMeshInstancedIndirect. Shadow casting is off (the
 		/// indirect path cannot join the cullResults shadow passes); shadow receiving stays on.
 		/// </summary>
-		public void SubmitFrame (Camera camera) {
+		public void PrepareFrame (Camera camera) {
 			submission.Clear();
 			for (int i = 0; i < instances.Count; i++) {
 				GpuSkeletonRenderer renderer = instances[i];
-				if (renderer != null && renderer.ShouldSubmit) submission.Add(renderer);
+				if (renderer != null) {
+					renderer.BatchInstanceIndex = -1;
+					if (renderer.ShouldSubmit) submission.Add(renderer);
+				}
 			}
 			int count = submission.Count;
 			SubmittedCount = count;
@@ -142,41 +168,58 @@ namespace GpuSpine.Core {
 			// [instanceIndex * deformStride] is filled in the same loop.
 			bool deformDirty = paletteDirty;
 			bool slotColorsDirty = paletteDirty;
+			bool clippingDirty = paletteDirty;
 			for (int i = 0; i < count; i++) {
 				GpuSkeletonRenderer renderer = submission[i];
 				GpuBoneMatrix[] bones = renderer.BoneMatrices;
 				if (bones != null) Array.Copy(bones, 0, paletteStaging, i * boneCount, boneCount);
-				if (renderer.ConsumePaletteDirty()) paletteDirty = true;
+				bool sourceChanged = uploadedSources[i] != renderer;
+				if (Entry.ClipVertexCapacity > 0) {
+					clippingDirty |= sourceChanged || clipVersions[i] != renderer.ClippingVersion;
+					clipVersions[i] = renderer.ClippingVersion;
+					Array.Copy(renderer.Clipping.TriangleVertices, 0, clipVertexStaging, i * Entry.ClipVertexCapacity, Entry.ClipVertexCapacity);
+					Array.Copy(renderer.Clipping.SlotRanges, 0, clipRangeStaging, i * slotCount, slotCount);
+				}
+				paletteDirty |= sourceChanged || paletteVersions[i] != renderer.PaletteVersion;
+				dynamicSlotsDirty |= sourceChanged || dynamicVersions[i] != renderer.DynamicSlotsVersion;
+				deformDirty |= sourceChanged || deformVersions[i] != renderer.DeformVersion;
+				slotColorsDirty |= sourceChanged || colorVersions[i] != renderer.SlotColorsVersion;
+				uploadedSources[i] = renderer;
+				paletteVersions[i] = renderer.PaletteVersion;
+				dynamicVersions[i] = renderer.DynamicSlotsVersion;
+				deformVersions[i] = renderer.DeformVersion;
+				colorVersions[i] = renderer.SlotColorsVersion;
 					if (dynamicSlotCount > 0) {
 						uint[] selection = renderer.DynamicSlotSelection;
 						if (selection != null) Array.Copy(selection, 0, dynSlotStaging, i * dynamicSlotCount, dynamicSlotCount);
-						if (renderer.ConsumeDynamicSlotsDirty()) dynamicSlotsDirty = true;
 					}
 					if (slotCount > 0) {
 						Vector4[] colors = renderer.SlotColors;
 						if (colors != null) Array.Copy(colors, 0, slotColorStaging, i * slotCount, slotCount);
 						else for (int s = 0; s < slotCount; s++) slotColorStaging[i * slotCount + s] = Vector4.one;
-						if (renderer.ConsumeSlotColorsDirty()) slotColorsDirty = true;
 					}
 					if (deformStride > 0) {
 						Vector2[] segment = renderer.DeformSegment;
 						if (segment != null) Array.Copy(segment, 0, deformStaging, i * deformStride, deformStride);
 						else Array.Clear(deformStaging, i * deformStride, deformStride);
-						if (renderer.ConsumeDeformDirty()) deformDirty = true;
 					}
+				renderer.BatchInstanceIndex = i; // Submission index == SV_InstanceID of this draw.
 				renderer.FillInstanceData(ref instanceStaging[i]);
 			}
 			if (paletteDirty) {
 				paletteBuffer.SetData(paletteStaging, 0, 0, count * boneCount);
 				uploadedMembershipVersion = membershipVersion;
 			}
-			if (dynamicSlotCount > 0 && dynamicSlotsDirty)
 				if (dynamicSlotCount > 0 && dynamicSlotsDirty)
 					dynSlotBuffer.SetData(dynSlotStaging, 0, 0, count * dynamicSlotCount);
 				if (deformStride > 0 && deformDirty)
 					deformBuffer.SetData(deformStaging, 0, 0, count * deformStride);
 				if (slotCount > 0 && slotColorsDirty)
 					slotColorBuffer.SetData(slotColorStaging, 0, 0, count * slotCount);
+			if (Entry.ClipVertexCapacity > 0 && clippingDirty) {
+				clipVertexBuffer.SetData(clipVertexStaging, 0, 0, count * Entry.ClipVertexCapacity);
+				clipRangeBuffer.SetData(clipRangeStaging, 0, 0, count * slotCount);
+			}
 			// Instance data (transform, skeleton color, custom slots) changes untracked: upload every frame.
 			instanceBuffer.SetData(instanceStaging, 0, 0, count);
 			uploadedInstanceCount = count;
@@ -184,10 +227,8 @@ namespace GpuSpine.Core {
 			argsArray[1] = (uint)count;
 			argsBuffer.SetData(argsArray);
 
-			bounds = ComputeBounds();
+			bounds = ComputeBounds(0, count);
 
-			Graphics.DrawMeshInstancedIndirect(Entry.Mesh, SubmeshIndex, material, bounds, argsBuffer,
-				0, null, ShadowCastingMode.Off, true, submission[0].gameObject.layer);
 		}
 
 		/// <summary>Stable insertion sort, back-to-front (larger depth first). Returns true when any
@@ -221,29 +262,9 @@ namespace GpuSpine.Core {
 
 		/// <summary>Union of the per-instance world bounds (baked bind-pose mesh bounds transformed by
 		/// each instance's localToWorld), plus a fixed margin for pose deviation.</summary>
-		Bounds ComputeBounds () {
-			Bounds localBounds = Entry.Mesh.bounds;
-			Bounds result = TransformBounds(submission[0].transform.localToWorldMatrix, localBounds);
-			for (int i = 1; i < submission.Count; i++) {
-				Bounds instanceBounds = TransformBounds(submission[i].transform.localToWorldMatrix, localBounds);
-				result.Encapsulate(instanceBounds.min);
-				result.Encapsulate(instanceBounds.max);
-			}
-			result.Expand(BoundsMargin * 2f);
-			return result;
-		}
-
-		static Bounds TransformBounds (Matrix4x4 matrix, Bounds localBounds) {
-			Vector3 center = localBounds.center;
-			Vector3 extents = localBounds.extents;
-			Bounds result = new Bounds(matrix.MultiplyPoint3x4(center), Vector3.zero);
-			for (int i = 0; i < 8; i++) {
-				Vector3 corner = center + new Vector3(
-					(i & 1) == 0 ? extents.x : -extents.x,
-					(i & 2) == 0 ? extents.y : -extents.y,
-					(i & 4) == 0 ? extents.z : -extents.z);
-				result.Encapsulate(matrix.MultiplyPoint3x4(corner));
-			}
+		Bounds ComputeBounds (int start, int count) {
+			Bounds result = submission[start].WorldBounds;
+			for (int i = start + 1; i < start + count; i++) result.Encapsulate(submission[i].WorldBounds);
 			return result;
 		}
 
@@ -259,6 +280,23 @@ namespace GpuSpine.Core {
 			instanceBuffer = new ComputeBuffer(capacity, InstanceDataStride, ComputeBufferType.Default);
 			paletteStaging = new GpuBoneMatrix[capacity * Entry.BoneCount];
 			instanceStaging = new GpuSpineInstanceData[capacity];
+			uploadedSources = new GpuSkeletonRenderer[capacity];
+			paletteVersions = new ulong[capacity];
+			dynamicVersions = new ulong[capacity];
+			deformVersions = new ulong[capacity];
+			colorVersions = new ulong[capacity];
+			material.SetInt("_GpuSpineInstanceFilter", -1);
+			if (clipVertexBuffer != null) clipVertexBuffer.Release();
+			if (clipRangeBuffer != null) clipRangeBuffer.Release();
+			if (Entry.ClipVertexCapacity > 0) {
+				clipVertexBuffer = new ComputeBuffer(capacity * Entry.ClipVertexCapacity, 8);
+				clipRangeBuffer = new ComputeBuffer(capacity * Entry.SlotCount, 8);
+				clipVertexStaging = new Vector2[capacity * Entry.ClipVertexCapacity];
+				clipRangeStaging = new Vector2[capacity * Entry.SlotCount];
+				clipVersions = new ulong[capacity];
+
+			}
+
 			if (Entry.DynamicSlotCount > 0) {
 				dynSlotBuffer = new ComputeBuffer(capacity * Entry.DynamicSlotCount, sizeof(uint), ComputeBufferType.Structured);
 				dynSlotStaging = new uint[capacity * Entry.DynamicSlotCount];
@@ -287,31 +325,39 @@ namespace GpuSpine.Core {
 					deformStaging = null;
 				}
 				instanceCapacity = capacity;
-				// Buffer (re)creation requires rebinding; material-level SetBuffer, following ES2DInstance.
-				material.SetBuffer("_GpuSpineBones", paletteBuffer);
-				material.SetBuffer("_GpuSpineInstances", instanceBuffer);
-				material.SetInt("_GpuSpineBoneCount", Entry.BoneCount);
-				if (dynSlotBuffer != null) {
-					material.SetBuffer("_GpuSpineDynSlots", dynSlotBuffer);
-					material.SetInt("_GpuSpineDynSlotCount", Entry.DynamicSlotCount);
-				}
-				if (deformBuffer != null) {
-					material.SetBuffer("_GpuSpineDeform", deformBuffer);
-					material.SetInt("_GpuSpineDeformStride", Entry.DeformStride);
-				}
-				if (slotColorBuffer != null) {
-					material.SetBuffer("_GpuSpineSlotColors", slotColorBuffer);
-					material.SetInt("_GpuSpineSlotCount", Entry.SlotCount);
-				}
+			BindBuffers(material);
+			foreach (GpuSpineDrawSlice slice in slices.Values) BindBuffers(slice.Material);
+		}
+
+        void BindBuffers (Material target) {
+            // Material copies do not retain runtime uniforms absent from ShaderLab Properties.
+            target.SetInt("_GpuSpineInstanceFilter", -1);
+            target.SetInt("_GpuSpineRenderingLayerMask", material.GetInt("_GpuSpineRenderingLayerMask"));
+			target.SetBuffer("_GpuSpineBones", paletteBuffer);
+			target.SetBuffer("_GpuSpineInstances", instanceBuffer);
+			target.SetInt("_GpuSpineBoneCount", Entry.BoneCount);
+			target.SetInt("_GpuSpineDynSlotCount", Entry.DynamicSlotCount);
+			target.SetInt("_GpuSpineDeformStride", Entry.DeformStride);
+			target.SetInt("_GpuSpineSlotCount", Entry.SlotCount);
+			target.SetInt("_GpuSpineClipStride", Entry.ClipVertexCapacity);
+			if (dynSlotBuffer != null) target.SetBuffer("_GpuSpineDynSlots", dynSlotBuffer);
+			if (deformBuffer != null) target.SetBuffer("_GpuSpineDeform", deformBuffer);
+			if (slotColorBuffer != null) target.SetBuffer("_GpuSpineSlotColors", slotColorBuffer);
+			if (clipVertexBuffer != null) {
+				target.SetBuffer("_GpuSpineClipVertices", clipVertexBuffer);
+				target.SetBuffer("_GpuSpineClipRanges", clipRangeBuffer);
 			}
+		}
 
 		/// <summary>Releases all buffers and destroys the cloned material.</summary>
 		public void Dispose () {
+			foreach (GpuSpineDrawSlice slice in slices.Values) slice.Dispose();
+			slices.Clear();
+			if (clipVertexBuffer != null) { clipVertexBuffer.Release(); clipVertexBuffer = null; }
+			if (clipRangeBuffer != null) { clipRangeBuffer.Release(); clipRangeBuffer = null; }
 			if (paletteBuffer != null) { paletteBuffer.Release(); paletteBuffer = null; }
 			if (instanceBuffer != null) { instanceBuffer.Release(); instanceBuffer = null; }
 			if (argsBuffer != null) { argsBuffer.Release(); argsBuffer = null; }
-			if (dynSlotBuffer != null) { dynSlotBuffer.Release(); dynSlotBuffer = null; }
-			if (deformBuffer != null) { deformBuffer.Release(); deformBuffer = null; }
 			if (dynSlotBuffer != null) { dynSlotBuffer.Release(); dynSlotBuffer = null; }
 			if (deformBuffer != null) { deformBuffer.Release(); deformBuffer = null; }
 			if (slotColorBuffer != null) { slotColorBuffer.Release(); slotColorBuffer = null; }

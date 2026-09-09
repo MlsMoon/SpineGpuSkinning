@@ -32,7 +32,7 @@ namespace GpuSpine.Baking {
 		const int MaxInfluences = 4;
 		/// <summary>Baked vertex/container format version, mixed into the editor's source fingerprint:
 		/// bump on every baked-layout change so stale containers rebuild automatically.</summary>
-		public const int BakeFormatVersion = 2;
+		public const int BakeFormatVersion = 5;
 		/// <summary>Defensive cap on the total vertex count of one entry (static zone plus all dynamic
 		/// variants). Exceeding it is a bake-time hard failure: the entry is recorded with a null mesh
 		/// and the audit gains a failure.</summary>
@@ -501,19 +501,12 @@ namespace GpuSpine.Baking {
 				GpuSpineDeformSlotInfo info = deformSlotInfos[i];
 				List<GpuSpineDeformAttachmentInfo> attachments = new List<GpuSpineDeformAttachmentInfo>();
 				int capacity = 0;
-				string[] names = info.AttachmentNames;
-					for (int a = 0, an = names != null ? names.Length : 0; a < an; a++) {
-						// DeformTimeline carries the attachment's Name (e.g. "CatS_01/body"), which may
-						// differ from the skin placeholder key (e.g. "body"): resolve by walking the
-						// skin's placeholders and matching names, effective skin first, then default skin.
-						Attachment attachment = FindAttachmentByName(effectiveSkin, info.SlotIndex, names[a]);
-						if (attachment == null) attachment = FindAttachmentByName(defaultSkin, info.SlotIndex, names[a]);
-						GpuSpineDeformAttachmentInfo attachmentInfo = BuildDeformAttachmentInfo(names[a], attachment);
-						if (attachmentInfo == null) continue;
-						if (attachmentInfo.DeformLength > capacity) capacity = attachmentInfo.DeformLength;
-						attachments.Add(attachmentInfo);
-					}
-				if (attachments.Count == 0) continue; // No deform attachment resolvable in this combination.
+				// Linked meshes inherit timelines from other skins. Include every variant in
+				// this slot, including undeformed replacements that need their own defaults.
+				var seen = new HashSet<string>(StringComparer.Ordinal);
+				CollectDeformAttachments(effectiveSkin, info.SlotIndex, seen, attachments, ref capacity);
+				CollectDeformAttachments(defaultSkin, info.SlotIndex, seen, attachments, ref capacity);
+				if (attachments.Count == 0) continue;
 				slots.Add(new GpuSpineDeformSlotEntry {
 					SlotIndex = info.SlotIndex,
 					SlotName = info.SlotName,
@@ -526,6 +519,18 @@ namespace GpuSpine.Baking {
 			}
 			deformSlots = slots.ToArray();
 			deformStride = prefix;
+		}
+
+		static void CollectDeformAttachments (Skin skin, int slotIndex, HashSet<string> seen,
+			List<GpuSpineDeformAttachmentInfo> attachments, ref int capacity) {
+			if (skin == null) return;
+			foreach (Skin.SkinEntry entry in skin.Attachments) {
+				if (entry.SlotIndex != slotIndex || entry.Attachment == null || !seen.Add(entry.Attachment.Name)) continue;
+				GpuSpineDeformAttachmentInfo info = BuildDeformAttachmentInfo(entry.Attachment.Name, entry.Attachment);
+				if (info == null) continue;
+				capacity = Math.Max(capacity, info.DeformLength);
+				attachments.Add(info);
+			}
 		}
 
 		/// <summary>

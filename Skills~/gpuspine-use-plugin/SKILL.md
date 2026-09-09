@@ -50,7 +50,7 @@ Source: `Runtime/GpuSkeletonRenderer.cs`. On enable (play mode only) the compone
 - `SkeletonRenderer.zSpacing` left at `0` (baking is fixed to 0; a mismatch falls back to
   the CPU path with a warning).
 - Skeleton data imported after the plugin is installed, so the automatic bake has run
-  (otherwise use `Assets/GpuSpine/Rebake Skeleton Data` once).
+  (otherwise use `Tools/GPUSpineSkin/Rebake Selected` or `Assets/GpuSpine/Rebake Skeleton Data` once).
 
 ❌ Common mistakes:
 
@@ -61,6 +61,12 @@ Source: `Runtime/GpuSkeletonRenderer.cs`. On enable (play mode only) the compone
   (see options below).
 - Re-enabling `updateMode` manually. The component re-forces `EverythingExceptMesh` in
   `LateUpdate`; fighting it revives the CPU mesh chain and double-renders.
+
+## 2.1 合批与项目 Pass 排错
+
+- 每个 `GpuSpineDrawSlice` 都必须重新绑定 `_GpuSpineInstanceFilter = -1`；材质复制不会可靠保留运行时 uniform。否则同一批次只会显示实例 0，实例排序变化时表现为猫闪现。
+- GPU Shader 的实例 ID 必须与 `SV_InstanceID` 和切片 `_GpuSpineInstanceOffset` 一起验证，不能只检查 `IsGpuActive`。
+- 连续帧验证至少记录相机绘制批次、可见源数量和 0 绘制帧；固定姿态下 CPU/GPU/再次启用 GPU 的 Mask 应保持一致。
 
 ## 2. Editor baking (automatic)
 
@@ -80,12 +86,23 @@ Source: `Editor/GpuSpineBakeProcessor.cs`, `Editor/GpuSpineBakerEditorUtility.cs
 - Baking is fixed to `zSpacing = 0` (recorded on the container as `BakedZSpacing`). Keep
   `SkeletonRenderer.zSpacing` at 0 on GPU-path skeletons.
 
-Editor menus (both operate on the SkeletonDataAsset selection):
+Editor menus (selection of one or more `SkeletonDataAsset`):
 
-- `Assets/GpuSpine/Rebake Skeleton Data` — force a rebake; also repairs containers whose
-  entry meshes were deleted by hand.
-- `Assets/GpuSpine/Log Audit Report` — logs the graded audit (failures, warnings, dynamic
-  slots and their variants) without baking.
+- `Tools/GPUSpineSkin/Rebake Selected` (also `Assets/GpuSpine/Rebake Skeleton Data`) —
+  rebakes when the source fingerprint or entry keys changed.
+- `Tools/GPUSpineSkin/Force Rebake Selected` — clears the fingerprint first, so the
+  no-change check cannot skip. Use this to repair containers whose entry meshes were
+  deleted by hand, or when a content change preserved file length and write time.
+- `Tools/GPUSpineSkin/Log Audit Report` (also `Assets/GpuSpine/Log Audit Report`) —
+  logs the graded audit (failures, warnings, dynamic slots and their variants)
+  without baking.
+- `Tools/GPUSpineSkin/Dump Baked Data` — logs the baked container, entries and
+  declared combos.
+- `Tools/GPUSpineSkin/Inspect Default Shader` — logs compile status of
+  `GpuSpine/URP/Skeleton`.
+
+Host-project smoke tools should hang off `Tools/GPUSpineSkin/Temp`, not a separate
+top-level menu.
 
 ### Declaring skin combinations (DeclaredCombos)
 
@@ -238,8 +255,8 @@ Complete example: `references/integration-examples.md`.
 |---|---|
 | Skeleton invisible / renders as before | The instance is on the CPU path. Read the Console: every refusal logs a warning starting with `GpuSkeletonRenderer stays on the CPU path:` naming the reason. |
 | Warning "no GpuSpineBakedData available" | Container not assigned and not registered. Assign `BakedData` or call `GpuSpineBakedRuntime.Register` before enable (runtime-spawned instances). |
-| Warning "audit failed" | A hard failure (deform/slot-color/sequence). Run `Assets/GpuSpine/Log Audit Report` on the SkeletonDataAsset for the full reasons. This skeleton cannot use the GPU path. |
-| Warning "no baked entry for the current skin combination (key ...)" | Composite skin not declared, or `AddSkin` order differs from `DeclaredCombos.SkinNames`. Fix the declaration order, then `Assets/GpuSpine/Rebake Skeleton Data`. |
+| Warning "audit failed" | A hard failure (deform/slot-color/sequence). Run `Tools/GPUSpineSkin/Log Audit Report` on the SkeletonDataAsset for the full reasons. This skeleton cannot use the GPU path. |
+| Warning "no baked entry for the current skin combination (key ...)" | Composite skin not declared, or `AddSkin` order differs from `DeclaredCombos.SkinNames`. Fix the declaration order, then `Tools/GPUSpineSkin/Force Rebake Selected`. |
 | Warning "zSpacing ... differs from the baked zSpacing 0" | Set `SkeletonRenderer.zSpacing` to 0. |
 | Renders on GPU but wrong overlap between instances | `SortMode`. Remember the first submitted instance decides the batch's mode; keep one mode per skeleton family. |
 | GPU-path skeleton disappears at distance | Bounds are the union of bind-pose bounds plus a fixed margin; extreme pose deviation beyond the margin can be culled. Check `Visible` first — most reports are a visibility toggle driving `MeshRenderer.enabled` (mapped to `Visible`, see section 1). |

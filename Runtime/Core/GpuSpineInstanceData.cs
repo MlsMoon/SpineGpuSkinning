@@ -4,14 +4,15 @@ using UnityEngine;
 namespace GpuSpine.Core {
 	/// <summary>
 	/// Per-instance draw data, indexed by SV_InstanceID in the GPU skinning shader. Sequential layout,
-	/// 112 bytes, mirrored 1:1 by the GpuSpineInstanceData struct in SpineGpuSkinning.hlsl (the
-	/// row_major float4x4 there matches the byte order of UnityEngine.Matrix4x4 here).
+	/// 96 bytes, mirrored by explicit affine rows in SpineGpuSkinning.hlsl.
 	/// </summary>
 	[StructLayout(LayoutKind.Sequential)]
 	public struct GpuSpineInstanceData {
 		/// <summary>GameObject transform (SkeletonAnimation.transform.localToWorldMatrix), mapping
 		/// skeleton space to world space; replaces the Transform step the CPU path gets for free.</summary>
-		public Matrix4x4 LocalToWorld;
+		public Vector4 LocalToWorldRow0;
+		public Vector4 LocalToWorldRow1;
+		public Vector4 LocalToWorldRow2;
 		/// <summary>Skeleton color: skeleton.R/G/B/A.</summary>
 		public Vector4 Color;
 		/// <summary>Per-instance extension slot, written via <see cref="GpuSpine.GpuSpineInstanceDataWriter"/>.</summary>

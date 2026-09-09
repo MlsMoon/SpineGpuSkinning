@@ -9,9 +9,9 @@ namespace GpuSpine {
 	/// <summary>
 	/// One-component switch that moves a <see cref="SkeletonAnimation"/> from CPU skinning to GPU
 	/// skinning: sets updateMode to EverythingExceptMesh (animation state, physics and bone world
-	/// transforms keep running on the CPU untouched), disables the MeshRenderer, exports the 3x2 bone
+	/// transforms keep running on the CPU untouched), suppresses CPU rendering, exports the 3x2 bone
 	/// matrices on UpdateComplete and lets <see cref="GpuSkinningManager"/> draw the editor-baked entry
-	/// mesh via DrawMeshInstancedIndirect. The component never bakes at runtime: when no usable baked
+	/// mesh via RenderMeshIndirect. The component never bakes at runtime: when no usable baked
 	/// data exists (no container, failed audit, missing entry, zSpacing mismatch), it logs a warning,
 	/// leaves the skeleton on the original CPU path and does nothing. Does nothing at all in edit mode,
 	/// so editor previews keep the original path. OnDisable restores the CPU path completely.
@@ -19,7 +19,7 @@ namespace GpuSpine {
 	[AddComponentMenu("Spine/Gpu Skeleton Renderer")]
 	public sealed class GpuSkeletonRenderer : MonoBehaviour {
 		/// <summary>Optional custom GPU material template. Its shader replaces the cloned page
-		/// material's shader; per-page atlas textures still come from the page material. Null uses
+		/// material's shader only for matching shader families; atlas textures come from the page. Null uses
 		/// the plugin default shader.</summary>
 		[Tooltip("Optional custom GPU material template; its shader is used instead of the plugin default.")]
 		public Material MaterialOverride;
@@ -36,17 +36,10 @@ namespace GpuSpine {
 		[Tooltip("Draw-order strategy of the batches this instance joins.")]
 		public GpuSpineSortMode SortMode = GpuSpineSortMode.CameraDepth;
 
-		/// <summary>Allows the GPU path when the audit found a draw order timeline. Runtime draw
-		/// order changes may reorder overlapping attachments against the baked setup order; when off
-		/// (default) a hit falls back to the CPU path with a warning.</summary>
-		[Tooltip("Allow the GPU path despite a draw order timeline (possible overlap-order artifacts). Off: CPU fallback with a warning.")]
-		public bool AllowDrawOrderTimeline;
-
-		/// <summary>Allows the GPU path when the audit found a clipping attachment. Clipped regions
-		/// render unclipped on the GPU path; when off (default) a hit falls back to the CPU path with
-		/// a warning.</summary>
-		[Tooltip("Allow the GPU path despite clipping attachments (rendered unclipped). Off: CPU fallback with a warning.")]
-		public bool IgnoreClipping;
+		/// <summary>Legacy serialized compatibility only; draw order is now replayed exactly.</summary>
+		[HideInInspector] public bool AllowDrawOrderTimeline;
+		/// <summary>Legacy serialized compatibility only; clipping is now always evaluated.</summary>
+		[HideInInspector] public bool IgnoreClipping;
 
 		/// <summary>Per-frame callback to fill the Custom0/Custom1 slots of this instance's draw data.</summary>
 		public event GpuSpineInstanceDataWriter WriteInstanceData;
@@ -54,35 +47,59 @@ namespace GpuSpine {
 		SkeletonAnimation skeletonAnimation;
 		MeshRenderer meshRenderer;
 		UpdateMode originalUpdateMode;
-		bool originalRendererEnabled;
+		UpdateMode originalInvisibleMode;
+		bool originalForceRenderingOff;
+		public System.Func<Camera, bool> CameraFilter;
 		GpuBoneMatrix[] boneMatrices;
 		GpuSpineBakedData currentBakedData;
-		string lastKey;
+		ulong lastKey;
 		bool gpuActive;
-		bool paletteDirty;
+		bool bakedLease;
+		ulong paletteVersion;
 		bool visible = true;
+		bool visibilityAssigned;
 		GpuSpineAuditReport lastAudit;
 		Dictionary<string, int>[] dynamicVariantLookup; // [dynSlotId] -> attachment name -> variant id
 		uint[] dynamicSlotSelection;                    // [dynSlotId] -> variant id or FoldAllVariants
 		HashSet<string> warnedMissingVariants;
-		bool dynamicSlotsDirty;
+		ulong dynamicSlotsVersion;
 		DeformSlotState[] deformSlots;   // null while the current entry has no deform slots
 		Vector2[] deformSegment;         // [entry.DeformStride] per-instance deform data (same lifecycle as boneMatrices)
-		bool deformDirty;
+		ulong deformVersion;
 		Vector4[] slotColors;            // [entry.SlotCount] per-instance slot colors (slot.R/G/B/A), same lifecycle
-		bool slotColorsDirty;
+		ulong slotColorsVersion;
+		ulong rejectedKey;
+		ulong lastOrderKey;
+		GpuSpineBakedEntry currentEntry;
+		GpuSpineClippingState clipping;
+		ulong clippingVersion;
+		bool activationPending;
+		bool eventsRegistered;
+		int boundsFrame = -1;
+		Bounds cachedBounds;
 
 		/// <summary>True while this skeleton is submitted through the GPU instanced path.</summary>
 		public bool IsGpuActive { get { return gpuActive; } }
 
 		/// <summary>Controls inclusion in the submission set: false removes the instance from the
 		/// submitted batches while bone matrix export keeps running (the skeleton stays animated).</summary>
-		public bool Visible { get { return visible; } set { visible = value; } }
+		public bool Visible {
+			get { return visible; }
+			set {
+				visible = value;
+				visibilityAssigned = true;
+				if (meshRenderer != null) meshRenderer.enabled = value;
+			}
+		}
 
 		/// <summary>The admittance audit evaluated on enable (null while never audited).</summary>
 		public GpuSpineAuditReport LastAudit { get { return lastAudit; } }
 
 		void OnEnable () {
+			activationPending = Application.isPlaying;
+		}
+
+		void TryActivate () {
 			if (!Application.isPlaying) return; // Edit-mode previews keep the original CPU path.
 			if (skeletonAnimation == null) {
 				skeletonAnimation = GetComponent<SkeletonAnimation>();
@@ -99,6 +116,9 @@ namespace GpuSpine {
 			}
 
 			skeletonAnimation.Initialize(false); // Idempotent; covers enabling before SkeletonAnimation.Awake.
+			RegisterEvents();
+			if (skeletonAnimation.Skeleton != null)
+				rejectedKey = GpuSpineBakedRuntime.ComputeRuntimeHash(skeletonAnimation.Skeleton);
 			SkeletonDataAsset asset = skeletonAnimation.skeletonDataAsset;
 			if (asset == null) {
 				Debug.Log("GpuSkeletonRenderer stays on the CPU path: no SkeletonDataAsset assigned.", this);
@@ -107,25 +127,20 @@ namespace GpuSpine {
 
 			// Editor-baked data only; the runtime never bakes. The component field wins over the registry.
 			GpuSpineBakedData bakedData = BakedData;
-			if (bakedData != null) GpuSpineBakedRuntime.Register(asset, bakedData);
-			else GpuSpineBakedRuntime.TryGet(asset, out bakedData);
+			if (bakedData == null) GpuSpineBakedRuntime.TryGet(asset, out bakedData);
 			if (bakedData == null) {
 				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: no GpuSpineBakedData available for the SkeletonDataAsset (assign BakedData or register one via GpuSpineBakedRuntime).", this);
 				return;
 			}
 
+			if (!bakedData.IsCompatible || bakedData.SourceAsset != asset) {
+				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: incompatible baked format or source asset. Rebake the skeleton.", this);
+				return;
+			}
 			lastAudit = bakedData.Audit;
 			if (lastAudit == null || !lastAudit.Passed) {
 				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path, audit failed. First reason: "
 					+ (lastAudit != null && lastAudit.Failures.Count > 0 ? lastAudit.Failures[0] : "unknown"), this);
-				return;
-			}
-			if (lastAudit.HasDrawOrderTimeline && !AllowDrawOrderTimeline) {
-				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: the skeleton uses a draw order timeline, which can reorder overlapping attachments against the baked setup order. Set AllowDrawOrderTimeline to accept the artifacts.", this);
-				return;
-			}
-			if (lastAudit.HasClipping && !IgnoreClipping) {
-				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: the skeleton uses a clipping attachment, which the GPU path renders unclipped. Set IgnoreClipping to accept unclipped rendering.", this);
 				return;
 			}
 			if (skeletonAnimation.zSpacing != bakedData.BakedZSpacing) {
@@ -140,7 +155,8 @@ namespace GpuSpine {
 				return;
 			}
 			string key = GpuSpineBakedRuntime.ComputeRuntimeKey(skeleton);
-			GpuSpineBakedEntry entry = bakedData.FindEntry(key);
+			lastOrderKey = GpuSpineDrawOrderKey.ComputeHash(skeleton);
+			GpuSpineBakedEntry entry = ResolveEntry(bakedData.FindEntry(key), lastOrderKey.ToString("X16"));
 			if (entry == null || entry.Mesh == null) {
 				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: no baked entry for the current skin combination (key "
 					+ key + "). Rebake the SkeletonDataAsset or declare the combination on its GpuSpineBakedData.", this);
@@ -148,18 +164,15 @@ namespace GpuSpine {
 			}
 
 			originalUpdateMode = skeletonAnimation.UpdateMode;
-			originalRendererEnabled = meshRenderer.enabled;
+			originalInvisibleMode = skeletonAnimation.updateWhenInvisible;
+			originalForceRenderingOff = meshRenderer.forceRenderingOff;
+			if (visibilityAssigned) meshRenderer.enabled = visible;
 			boneMatrices = new GpuBoneMatrix[entry.BoneCount];
 			currentBakedData = bakedData;
-			lastKey = key;
+			lastKey = GpuSpineBakedRuntime.ComputeRuntimeHash(skeleton);
+			currentEntry = entry;
+			BuildClipping(entry, skeleton);
 
-			// Double cut of the CPU mesh chain: EverythingExceptMesh skips LateUpdateMesh, and the
-			// disabled MeshRenderer additionally blocks the OnBecameVisible updateMode reset.
-			skeletonAnimation.UpdateMode = UpdateMode.EverythingExceptMesh;
-			meshRenderer.enabled = false;
-			skeletonAnimation.UpdateComplete += OnSkeletonUpdateComplete;
-			GpuSkinningManager.Register(this, entry);
-			gpuActive = true;
 			ExportBoneMatrices(skeleton); // A valid palette from the very first frame.
 			BuildDynamicSlotState(entry);
 			RefreshDynamicSlots(skeleton); // A valid variant selection from the very first frame.
@@ -167,22 +180,34 @@ namespace GpuSpine {
 			FillDeform(skeleton); // A valid deform segment from the very first frame.
 			BuildSlotColorState(entry);
 			FillSlotColors(skeleton); // Valid slot colors from the very first frame.
+			if (!GpuSkinningManager.Register(this, entry)) {
+				RestoreCpuPath("GpuSkeletonRenderer: batch registration failed; CPU rendering retained.");
+				return;
+			}
+			GpuSpineBakedRuntime.Retain(bakedData);
+			bakedLease = true;
+			skeletonAnimation.UpdateMode = UpdateMode.EverythingExceptMesh;
+			skeletonAnimation.updateWhenInvisible = UpdateMode.EverythingExceptMesh;
+			meshRenderer.forceRenderingOff = true;
+			gpuActive = true;
 		}
 
 		void OnDisable () {
+			activationPending = false;
+			UnregisterEvents();
+			BatchInstanceIndex = -1;
 			if (!gpuActive) return;
 			RestoreCpuPath(null);
 		}
 
 		void LateUpdate () {
-			if (!gpuActive) return;
-			// Guard against external code re-enabling the MeshRenderer (e.g. visibility toggles driving
-			// Renderer.enabled): that intent maps to the submission set, while the renderer itself must
-			// stay disabled to prevent CPU/GPU double rendering.
-			if (meshRenderer != null && meshRenderer.enabled) {
-				visible = true;
-				meshRenderer.enabled = false;
+			if (activationPending) {
+				activationPending = false;
+				TryActivate();
 			}
+			if (!gpuActive) return;
+			// Preserve Renderer.enabled as visibility intent while suppressing automatic CPU draws.
+			if (meshRenderer != null) meshRenderer.forceRenderingOff = true;
 			// Defensive: the GPU path requires EverythingExceptMesh at all times; Spine callbacks such
 			// as OnBecameVisible reset updateMode to FullUpdate, which would revive the CPU mesh chain.
 			if (skeletonAnimation != null && skeletonAnimation.UpdateMode != UpdateMode.EverythingExceptMesh)
@@ -190,34 +215,59 @@ namespace GpuSpine {
 		}
 
 		void OnSkeletonUpdateComplete (ISkeletonAnimation animated) {
+			boundsFrame = -1;
 			// Fired after the bone world transforms are final (including constraints and UpdateLocal
 			// writers such as carry-sway bone edits).
 			Skeleton skeleton = skeletonAnimation.Skeleton;
 			if (skeleton == null) return;
-			ExportBoneMatrices(skeleton);
+			if (!gpuActive) {
+				if (GpuSpineBakedRuntime.ComputeRuntimeHash(skeleton) != rejectedKey) TryActivate();
+				return;
+			}
+			ulong key = GpuSpineBakedRuntime.ComputeRuntimeHash(skeleton);
+			ulong orderKey = GpuSpineDrawOrderKey.ComputeHash(skeleton);
+			if (key != lastKey || orderKey != lastOrderKey) {
+				GpuSpineBakedEntry entry = ResolveEntry(currentBakedData.FindEntry(key.ToString("X16")), orderKey.ToString("X16"));
+				if (entry == null || entry.Mesh == null) {
+					rejectedKey = key;
+					RestoreCpuPath("GpuSkeletonRenderer: missing baked skin or draw-order layout.");
+					return;
+				}
+				if (!GpuSkinningManager.ChangeEntry(this, entry)) {
+					rejectedKey = key;
+					RestoreCpuPath("GpuSkeletonRenderer: batch registration failed.");
+					return;
+				}
+				if (key != lastKey) {
+					boneMatrices = new GpuBoneMatrix[entry.BoneCount];
+					BuildDynamicSlotState(entry);
+					BuildDeformState(entry);
+					BuildSlotColorState(entry);
+					BuildClipping(entry, skeleton);
+				}
+				lastKey = key;
+				lastOrderKey = orderKey;
+				currentEntry = entry;
+			}
 			ExportBoneMatrices(skeleton);
 			RefreshDynamicSlots(skeleton);
 			FillDeform(skeleton);
 			FillSlotColors(skeleton);
+			if (clipping != null) { clipping.Update(skeleton); clippingVersion++; }
+		}
 
-			string key = GpuSpineBakedRuntime.ComputeRuntimeKey(skeleton);
-			if (key == lastKey) return;
-			lastKey = key;
-			// The effective skin combination changed: look up the pre-baked entry and move to its batches.
-			GpuSpineBakedEntry entry = currentBakedData != null ? currentBakedData.FindEntry(key) : null;
-			if (entry != null && entry.Mesh != null) {
-				if (entry.BoneCount != boneMatrices.Length) boneMatrices = new GpuBoneMatrix[entry.BoneCount];
-				GpuSkinningManager.ChangeEntry(this, entry);
-				BuildDynamicSlotState(entry); // The new entry has its own variant table and slot count.
-				BuildDynamicSlotState(entry); // The new entry has its own variant table and slot count.
-				RefreshDynamicSlots(skeleton);
-				BuildDeformState(entry); // The new entry has its own deform layout.
-				FillDeform(skeleton);
-				BuildSlotColorState(entry); // The new entry has its own slot count.
-				FillSlotColors(skeleton);
-			} else {
-				RestoreCpuPath("GpuSkeletonRenderer fell back to the CPU path: no baked entry for the new skin combination (key " + key + ").");
-			}
+		GpuSpineBakedEntry ResolveEntry (GpuSpineBakedEntry entry, string orderKey) {
+			if (entry == null) return null;
+			if (entry.DrawOrderLayouts != null && entry.DrawOrderLayouts.Length > 0)
+				return entry.FindOrderedEntry(orderKey);
+			return lastAudit.HasDrawOrderTimeline || lastAudit.HasClipping ? null : entry;
+		}
+
+		void BuildClipping (GpuSpineBakedEntry entry, Skeleton skeleton) {
+			clipping = entry.ClipVertexCapacity > 0
+				? new GpuSpineClippingState(entry.ClipVertexCapacity, entry.SlotCount) : null;
+			if (clipping != null) clipping.Update(skeleton);
+			clippingVersion++;
 		}
 
 		void ExportBoneMatrices (Skeleton skeleton) {
@@ -230,7 +280,7 @@ namespace GpuSpine {
 				Bone bone = items[i];
 				boneMatrices[i] = new GpuBoneMatrix(bone.A, bone.B, bone.C, bone.D, bone.WorldX, bone.WorldY);
 			}
-			paletteDirty = true;
+			paletteVersion++;
 		}
 
 		/// <summary>Selection value written for a dynamic slot whose current attachment is null or not
@@ -265,7 +315,7 @@ namespace GpuSpine {
 			dynamicSlotSelection = new uint[dynamicSlotCount];
 			for (int i = 0; i < dynamicSlotCount; i++) dynamicSlotSelection[i] = FoldAllVariants; // Safe default: hidden until refreshed.
 			warnedMissingVariants = new HashSet<string>();
-			dynamicSlotsDirty = true; // The fold-all selection must be refreshed before upload.
+			dynamicSlotsVersion++;
 		}
 
 		/// <summary>Per-deform-slot runtime state: the slot's segment window plus the fallback lookup
@@ -304,7 +354,7 @@ namespace GpuSpine {
 				};
 			}
 			deformSegment = new Vector2[entry.DeformStride];
-			deformDirty = true; // The segment must be uploaded before the first submission.
+			deformVersion++;
 		}
 
 		/// <summary>Refreshes the per-instance deform segment from the live skeleton state, once per
@@ -350,7 +400,7 @@ namespace GpuSpine {
 				} else {
 					for (int p = 0; p < capacity; p++) deformSegment[prefix + p] = Vector2.zero;
 				}
-				deformDirty = true;
+				deformVersion++;
 			}
 		}
 
@@ -370,7 +420,7 @@ namespace GpuSpine {
 				int slotIndex = dynamicSlots[dynSlotId].SlotIndex;
 				if (slotIndex >= 0 && slotIndex < slots.Count) {
 					Attachment attachment = slots.Items[slotIndex].Attachment;
-					if (attachment != null) {
+					if (attachment is RegionAttachment || attachment is MeshAttachment) {
 						Dictionary<string, int> lookup = dynamicVariantLookup[dynSlotId];
 						int variantId;
 						if (lookup != null && lookup.TryGetValue(attachment.Name, out variantId))
@@ -381,7 +431,7 @@ namespace GpuSpine {
 				}
 				if (dynamicSlotSelection[dynSlotId] != selected) {
 					dynamicSlotSelection[dynSlotId] = selected;
-					dynamicSlotsDirty = true;
+					dynamicSlotsVersion++;
 				}
 			}
 		}
@@ -402,7 +452,7 @@ namespace GpuSpine {
 		/// entry change.</summary>
 		void BuildSlotColorState (GpuSpineBakedEntry entry) {
 			slotColors = entry.SlotCount > 0 ? new Vector4[entry.SlotCount] : null;
-			slotColorsDirty = true; // The segment must be uploaded before the first submission.
+			slotColorsVersion++;
 		}
 
 		/// <summary>Refreshes the per-instance slot color segment from the live skeleton state
@@ -419,33 +469,34 @@ namespace GpuSpine {
 				slotColors[i] = new Vector4(slot.R, slot.G, slot.B, slot.A);
 			}
 			for (int i = count; i < slotColors.Length; i++) slotColors[i] = Vector4.one;
-			slotColorsDirty = true;
+			slotColorsVersion++;
 		}
 
 		/// <summary>Full restore of the original CPU path: original updateMode, original MeshRenderer
-		/// enabled state, event unsubscribed, batches left, references released.</summary>
+		/// suppression state, batches left, references released.</summary>
 		void RestoreCpuPath (string reason) {
 			if (reason != null) Debug.LogWarning(reason, this);
 			gpuActive = false;
 			if (skeletonAnimation != null) {
-				skeletonAnimation.UpdateComplete -= OnSkeletonUpdateComplete;
 				skeletonAnimation.UpdateMode = originalUpdateMode;
+				skeletonAnimation.updateWhenInvisible = originalInvisibleMode;
 			}
-			if (meshRenderer != null) meshRenderer.enabled = originalRendererEnabled;
+			if (meshRenderer != null) meshRenderer.forceRenderingOff = originalForceRenderingOff;
 			GpuSkinningManager.Unregister(this);
+			if (bakedLease) GpuSpineBakedRuntime.Release(currentBakedData);
+			bakedLease = false;
 			boneMatrices = null;
 			currentBakedData = null;
-			lastKey = null;
-			paletteDirty = false;
+			currentEntry = null;
+			clipping = null;
+			lastKey = 0;
+			BatchInstanceIndex = -1;
 			dynamicVariantLookup = null;
 			dynamicSlotSelection = null;
 			warnedMissingVariants = null;
-			dynamicSlotsDirty = false;
 			deformSlots = null;
 			deformSegment = null;
-			deformDirty = false;
 			slotColors = null;
-			slotColorsDirty = false;
 		}
 
 		internal GpuBoneMatrix[] BoneMatrices { get { return boneMatrices; } }
@@ -454,51 +505,105 @@ namespace GpuSpine {
 		/// current entry has no dynamic slots). Same lifecycle as the bone matrix palette.</summary>
 		internal uint[] DynamicSlotSelection { get { return dynamicSlotSelection; } }
 
-		/// <summary>Reads and clears the dynamic slot selection dirty flag set by RefreshDynamicSlots.</summary>
-		/// <summary>Reads and clears the dynamic slot selection dirty flag set by RefreshDynamicSlots.</summary>
-		internal bool ConsumeDynamicSlotsDirty () {
-			bool dirty = dynamicSlotsDirty;
-			dynamicSlotsDirty = false;
-			return dirty;
-		}
+		/// <summary>Version observed independently by every upload target.</summary>
+		internal ulong DynamicSlotsVersion => dynamicSlotsVersion;
 
 		/// <summary>The per-instance deform segment uploaded by the batches (null while the current
 		/// entry has no deform slots). Same lifecycle as the bone matrix palette.</summary>
 		internal Vector2[] DeformSegment { get { return deformSegment; } }
 
-		/// <summary>Reads and clears the deform dirty flag set by FillDeform.</summary>
-		internal bool ConsumeDeformDirty () {
-			bool dirty = deformDirty;
-			deformDirty = false;
-			return dirty;
-		}
+		/// <summary>Version observed independently by every upload target.</summary>
+		internal ulong DeformVersion => deformVersion;
 
 		/// <summary>The per-instance slot color segment uploaded by the batches (null while the
 		/// current entry has no slots, which never happens in practice). Same lifecycle as the
 		/// bone matrix palette.</summary>
 		internal Vector4[] SlotColors { get { return slotColors; } }
 
-		/// <summary>Reads and clears the slot color dirty flag set by FillSlotColors.</summary>
-		internal bool ConsumeSlotColorsDirty () {
-			bool dirty = slotColorsDirty;
-			slotColorsDirty = false;
-			return dirty;
-		}
+		/// <summary>Version observed independently by every upload target.</summary>
+		internal ulong SlotColorsVersion => slotColorsVersion;
 
 		/// <summary>True when the instance belongs in this frame's submission set.</summary>
-		internal bool ShouldSubmit { get { return gpuActive && visible && isActiveAndEnabled; } }
+		internal bool ShouldSubmit { get { return gpuActive && visible && isActiveAndEnabled && meshRenderer != null && meshRenderer.enabled && !originalForceRenderingOff; } }
+		public MeshRenderer SourceRenderer => meshRenderer;
+		public Transform SkeletonTransform => skeletonAnimation != null ? skeletonAnimation.transform : transform;
+		internal bool ShouldSubmitTo(Camera camera) => ShouldSubmit && camera != null &&
+			(camera.cullingMask & (1 << SourceRenderer.gameObject.layer)) != 0 && (CameraFilter == null || CameraFilter(camera));
 
-		/// <summary>Reads and clears the palette dirty flag set by the bone matrix export.</summary>
-		internal bool ConsumePaletteDirty () {
-			bool dirty = paletteDirty;
-			paletteDirty = false;
-			return dirty;
+		/// <summary>Instance index (SV_InstanceID) of this renderer within its batches' submission
+		/// arrays this frame, written by GpuSpineBatch while filling instance data. -1 while not
+		/// submitted. All batches of one entry share the same submission order, so a single index
+		/// addresses every batch of the renderer (used by per-instance mask resubmission).</summary>
+		public int BatchInstanceIndex { get; internal set; } = -1;
+
+		/// <summary>Version observed independently by every upload target.</summary>
+		internal ulong PaletteVersion => paletteVersion;
+		internal ulong ClippingVersion => clippingVersion;
+		internal GpuSpineClippingState Clipping => clipping;
+		internal GpuSpineBakedEntry CurrentEntry => currentEntry;
+		internal Shader ResolveMaterialShader(Material page) => MaterialOverride != null && page != null && page.shader == MaterialOverride.shader
+			? MaterialOverride.shader : currentBakedData != null ? currentBakedData.DefaultShader : null;
+
+		public Bounds WorldBounds {
+			get {
+				if (boundsFrame != Time.frameCount) {
+					cachedBounds = CalculateWorldBounds;
+					boundsFrame = Time.frameCount;
+				}
+				return cachedBounds;
+			}
+		}
+
+		Bounds CalculateWorldBounds {
+			get {
+				float radius = 0f, deformMargin = 0f;
+				if (deformSegment != null) {
+					foreach (Vector2 value in deformSegment)
+						deformMargin = Mathf.Max(deformMargin, Mathf.Max(Mathf.Abs(value.x), Mathf.Abs(value.y)));
+				}
+				if (currentEntry?.BoneBounds != null && boneMatrices != null) {
+					for (int i = 0; i < boneMatrices.Length; i++) {
+						if (!currentEntry.UsedBones[i]) continue;
+						Bounds local = currentEntry.BoneBounds[i];
+						// Unweighted deform values are absolute local positions, so include the origin.
+						local.Encapsulate(Vector3.zero);
+						Vector2 extent = (Vector2)local.extents + Vector2.one * deformMargin;
+						GpuBoneMatrix bone = boneMatrices[i];
+						for (int corner = 0; corner < 4; corner++) {
+							Vector2 point = (Vector2)local.center + new Vector2((corner & 1) == 0 ? extent.x : -extent.x,
+								(corner & 2) == 0 ? extent.y : -extent.y);
+							Vector2 world = new Vector2(Vector2.Dot(bone.Row0, point), Vector2.Dot(bone.Row1, point)) + bone.Row2;
+							radius = Mathf.Max(radius, world.magnitude);
+						}
+					}
+				} else if (meshRenderer != null) {
+					return meshRenderer.bounds;
+				}
+				Vector3 scale = SkeletonTransform.lossyScale;
+				radius *= Mathf.Max(Mathf.Abs(scale.x), Mathf.Max(Mathf.Abs(scale.y), Mathf.Abs(scale.z)));
+				return new Bounds(SkeletonTransform.position, Vector3.one * Mathf.Max(radius * 2f, 0.001f));
+			}
+		}
+
+		void RegisterEvents () {
+			if (eventsRegistered) return;
+			skeletonAnimation.UpdateComplete += OnSkeletonUpdateComplete;
+			eventsRegistered = true;
+		}
+
+		void UnregisterEvents () {
+			if (!eventsRegistered) return;
+			if (skeletonAnimation != null) skeletonAnimation.UpdateComplete -= OnSkeletonUpdateComplete;
+			eventsRegistered = false;
 		}
 
 		/// <summary>Fills one instance data record: transform, skeleton color, then the user callback
 		/// for the Custom0/Custom1 extension slots.</summary>
 		internal void FillInstanceData (ref GpuSpineInstanceData data) {
-			data.LocalToWorld = transform.localToWorldMatrix;
+			Matrix4x4 matrix = skeletonAnimation.transform.localToWorldMatrix;
+			data.LocalToWorldRow0 = matrix.GetRow(0);
+			data.LocalToWorldRow1 = matrix.GetRow(1);
+			data.LocalToWorldRow2 = matrix.GetRow(2);
 			Skeleton skeleton = skeletonAnimation != null ? skeletonAnimation.Skeleton : null;
 			data.Color = skeleton != null ? new Vector4(skeleton.R, skeleton.G, skeleton.B, skeleton.A) : Vector4.one;
 			data.Custom0 = Vector4.zero;
