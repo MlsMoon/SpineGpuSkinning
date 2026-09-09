@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using GpuSpine.Baking;
 using GpuSpine.Core;
+using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -9,6 +10,9 @@ namespace GpuSpine {
     public sealed class GpuSkinningManager : MonoBehaviour {
         static GpuSkinningManager instance;
         static readonly GpuSpineBatchInfo[] Empty = new GpuSpineBatchInfo[0];
+        /// <summary>Profiler marker isolating this plugin's beginCameraRendering work (batch
+        /// lifecycle, buffer uploads, indirect submission) from other subscribers of the event.</summary>
+        static readonly ProfilerMarker CameraPrepareMarker = new ProfilerMarker("GpuSpine.CameraPrepare");
         readonly Dictionary<GpuSkeletonRenderer, GpuSpineBakedEntry> sources = new();
         readonly Dictionary<Camera, GpuSpineCameraFrame> cameras = new();
         readonly List<Camera> removedCameras = new();
@@ -54,21 +58,37 @@ namespace GpuSpine {
         }
 
         public static bool ChangeEntry(GpuSkeletonRenderer renderer, GpuSpineBakedEntry entry) {
+            EntryChanges++;
             Unregister(renderer);
             return Register(renderer, entry);
         }
 
+        /// <summary>Monotonic lifecycle counters for churn diagnostics:
+        /// [0] ChangeEntry calls, [1] batches created, [2] batches disposed,
+        /// [3] batches parked idle, [4] idle batches reused, [5] draw slices created.</summary>
+        public static int[] GetLifecycleCounters() {
+            return new[] {
+                EntryChanges,
+                GpuSpineCameraFrame.BatchesCreated, GpuSpineCameraFrame.BatchesDisposed,
+                GpuSpineCameraFrame.BatchesParked, GpuSpineCameraFrame.BatchesReused,
+                GpuSpineBatch.SlicesCreated
+            };
+        }
+        static int EntryChanges;
+
         void BeginCamera(ScriptableRenderContext context, Camera camera) {
             if (sources.Count == 0) return;
-            removedCameras.Clear();
-            foreach (var pair in cameras) if (pair.Key == null) removedCameras.Add(pair.Key);
-            foreach (var removed in removedCameras) { cameras[removed].Dispose(); cameras.Remove(removed); }
-            if (!cameras.TryGetValue(camera, out var frame)) {
-                frame = new GpuSpineCameraFrame(camera);
-                cameras.Add(camera, frame);
+            using (CameraPrepareMarker.Auto()) {
+                removedCameras.Clear();
+                foreach (var pair in cameras) if (pair.Key == null) removedCameras.Add(pair.Key);
+                foreach (var removed in removedCameras) { cameras[removed].Dispose(); cameras.Remove(removed); }
+                if (!cameras.TryGetValue(camera, out var frame)) {
+                    frame = new GpuSpineCameraFrame(camera);
+                    cameras.Add(camera, frame);
+                }
+                frame.Prepare(sources);
+                lastCamera = frame;
             }
-            frame.Prepare(sources);
-            lastCamera = frame;
         }
 
         public static IReadOnlyList<GpuSpineBatchInfo> GetBatches(Camera camera) {

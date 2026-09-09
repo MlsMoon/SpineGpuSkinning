@@ -42,8 +42,20 @@ namespace GpuSpine.Core {
 			}
 		}
 
+		/// <summary>Upper bound of empty batches kept alive for reuse by this camera. Draw-order and
+		/// skin changes move instances between entries, which would otherwise dispose and recreate the
+		/// same (entry, submesh) batches — cloned materials, GPU buffers and CPU staging arrays — every
+		/// time. The pool bounds that churn; overflow falls back to the old dispose behaviour.</summary>
+		const int MaxIdleBatches = 64;
+
+		/// <summary>Process-wide batch lifecycle counters (monotonic), for allocation-churn
+		/// diagnostics. Read via <see cref="GpuSkinningManager.GetLifecycleCounters"/>.</summary>
+		internal static int BatchesCreated, BatchesDisposed, BatchesParked, BatchesReused;
+
         readonly Dictionary<BatchKey, GpuSpineBatch> batches = new();
         readonly Dictionary<GpuSpineBatch, BatchKey> keysByBatch = new();
+		readonly Dictionary<BatchKey, GpuSpineBatch> idleBatches = new();
+		readonly List<BatchKey> idleOrder = new(); // Oldest first; eviction order once the pool is full.
         readonly Dictionary<GpuSkeletonRenderer, List<GpuSpineBatch>> batchesByInstance = new();
         readonly List<GpuSpineBatchInfo> batchInfoCache = new();
         readonly List<GpuSpineBatchInfo> selectedDraws = new();
@@ -71,10 +83,16 @@ namespace GpuSpine.Core {
                 for (int i = 0; i < pair.Value.Submeshes.Length; i++) {
                     var key = new BatchKey(pair.Value, i, pair.Key);
                     if (!batches.TryGetValue(key, out var batch)) {
-                        Material material = CreateBatchMaterial(pair.Value.Submeshes[i].PageMaterial, pair.Key);
-                        if (material == null) continue;
-                        material.SetInt("_GpuSpineRenderingLayerMask", unchecked((int)pair.Key.SourceRenderer.renderingLayerMask));
-                        batch = new GpuSpineBatch(pair.Value, i, material);
+                        batch = TakeIdle(key);
+                        if (batch != null) {
+                            BatchesReused++;
+                        } else {
+                            Material material = CreateBatchMaterial(pair.Value.Submeshes[i].PageMaterial, pair.Key);
+                            if (material == null) continue;
+                            material.SetInt("_GpuSpineRenderingLayerMask", unchecked((int)pair.Key.SourceRenderer.renderingLayerMask));
+                            batch = new GpuSpineBatch(pair.Value, i, material);
+                            BatchesCreated++;
+                        }
                         batches.Add(key, batch); keysByBatch.Add(batch, key);
                     }
                     batch.Add(pair.Key); joined.Add(batch);
@@ -156,14 +174,45 @@ namespace GpuSpine.Core {
             foreach (var batch in joined) {
                 batch.Remove(source);
                 if (batch.RegisteredCount != 0) continue;
-                batches.Remove(keysByBatch[batch]); keysByBatch.Remove(batch); batch.Dispose();
+                BatchKey key = keysByBatch[batch];
+                batches.Remove(key); keysByBatch.Remove(batch);
+                ParkIdle(key, batch);
             }
         }
+
+		/// <summary>Takes a pooled empty batch for the key, or null when none is parked.</summary>
+		GpuSpineBatch TakeIdle (BatchKey key) {
+			if (!idleBatches.TryGetValue(key, out GpuSpineBatch batch)) return null;
+			idleBatches.Remove(key);
+			idleOrder.Remove(key);
+			return batch;
+		}
+
+		/// <summary>Parks an emptied batch for reuse instead of disposing it. The membership version
+		/// bump on the next Add re-triggers every dirty upload, and EnsureCapacity rebinds all slice
+		/// materials after buffer regrowth, so a reused batch needs no extra reset. Once the pool is
+		/// full the oldest parked batch is disposed (the pre-pool behaviour for every empty batch).</summary>
+		void ParkIdle (BatchKey key, GpuSpineBatch batch) {
+			if (idleBatches.Count >= MaxIdleBatches) {
+				BatchKey oldest = idleOrder[0];
+				idleOrder.RemoveAt(0);
+				GpuSpineBatch evicted = idleBatches[oldest];
+				idleBatches.Remove(oldest);
+				evicted.Dispose();
+				BatchesDisposed++;
+			}
+			idleBatches.Add(key, batch);
+			idleOrder.Add(key);
+			BatchesParked++;
+		}
 
         public void Dispose() {
             foreach (var joined in batchesByInstance.Values) joined[0].Entry.ReleaseRuntimeLayout();
             foreach (var batch in batches.Values) batch.Dispose();
+			foreach (var batch in idleBatches.Values) batch.Dispose();
+			BatchesDisposed += batches.Count + idleBatches.Count;
             batchesByInstance.Clear(); batches.Clear(); keysByBatch.Clear(); batchInfoCache.Clear();
+			idleBatches.Clear(); idleOrder.Clear();
         }
 		Material CreateBatchMaterial (Material pageMaterial, GpuSkeletonRenderer renderer) {
 			Material materialOverride = renderer.MaterialOverride;

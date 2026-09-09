@@ -105,12 +105,16 @@ namespace GpuSpine.Core {
 
 		public int FindSourceIndex (GpuSkeletonRenderer source) => submission.IndexOf(source);
 
+		/// <summary>Process-wide slice creation counter (monotonic), for allocation-churn diagnostics.</summary>
+		internal static int SlicesCreated;
+
 		public GpuSpineBatchInfo GetSlice (int start, int count) {
 			ulong key = ((ulong)(uint)start << 32) | (uint)count;
 			if (!slices.TryGetValue(key, out GpuSpineDrawSlice slice)) {
 				slice = new GpuSpineDrawSlice(material, argsArray, start);
 				BindBuffers(slice.Material);
 				slices.Add(key, slice);
+				SlicesCreated++;
 			}
 			slice.SetCount(count);
 			return new GpuSpineBatchInfo {
