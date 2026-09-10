@@ -134,7 +134,18 @@ namespace GpuSpine.Baking {
 		[NonSerialized] GpuSpineBakedEntry runtimeOwner;
 		[NonSerialized] int runtimeUsers;
 		[NonSerialized] int lastUsedFrame;
+		[NonSerialized] Mesh runtimeLayoutMesh;
 
+		/// <summary>Process-wide counter of combined layout meshes built at runtime (monotonic),
+		/// for allocation-spike diagnostics. Read via GpuSkinningManager.GetLifecycleCounters().</summary>
+		internal static int LayoutMeshesBuilt;
+
+		/// <summary>Returns the layout view for a runtime draw-order key. All layouts share the baked
+		/// vertex streams: the first lookup builds ONE runtime mesh concatenating every baked layout's
+		/// index stream, and each layout view is a lightweight clone whose submeshes point at its own
+		/// index range (indirect args carry IndexStart/IndexCount, so batches draw the right range from
+		/// the shared mesh). This replaces the old per-layout full mesh clones, whose Instantiate churn
+		/// produced multi-MiB allocation spikes on draw-order switches.</summary>
 		public GpuSpineBakedEntry FindOrderedEntry (string orderKey) {
 			if (DrawOrderLayouts == null || DrawOrderLayouts.Length == 0) return null;
 			if (orderedEntries == null) orderedEntries = new Dictionary<string, GpuSpineBakedEntry>();
@@ -142,57 +153,76 @@ namespace GpuSpine.Baking {
 				cached.lastUsedFrame = Time.frameCount;
 				return cached;
 			}
+			int layoutOffset = 0;
 			foreach (GpuSpineDrawOrderLayout layout in DrawOrderLayouts) {
-				if (layout.Key != orderKey || layout.Indices == null) continue;
-				EvictUnusedLayout();
-				GpuSpineBakedEntry entry = (GpuSpineBakedEntry)MemberwiseClone();
-				entry.Mesh = layout == DrawOrderLayouts[0] ? Mesh : UnityEngine.Object.Instantiate(Mesh);
-				if (entry.Mesh != Mesh) {
-					entry.Mesh.hideFlags = HideFlags.DontSave;
-					entry.Mesh.subMeshCount = layout.Submeshes.Length;
-					for (int i = 0; i < layout.Submeshes.Length; i++) {
-						GpuSpineSubmesh part = layout.Submeshes[i];
-						entry.Mesh.SetTriangles(layout.Indices, part.IndexStart, part.IndexCount, i, false, 0);
-					}
+				if (layout.Indices == null) continue;
+				if (layout.Key == orderKey) {
+					Mesh layoutMesh = GetOrCreateLayoutMesh();
+					if (layoutMesh == null) return null;
+					GpuSpineBakedEntry entry = (GpuSpineBakedEntry)MemberwiseClone();
+					entry.Mesh = layoutMesh;
+					entry.Submeshes = RebaseSubmeshes(layout, layoutOffset);
+					entry.DrawOrderLayouts = null;
+					entry.orderedEntries = null;
+					entry.runtimeLayoutMesh = null;
+					entry.runtimeOwner = this;
+					entry.runtimeUsers = 0;
+					entry.lastUsedFrame = Time.frameCount;
+					orderedEntries.Add(orderKey, entry);
+					return entry;
 				}
-				entry.Submeshes = layout.Submeshes;
-				entry.DrawOrderLayouts = null;
-				entry.orderedEntries = null;
-				entry.runtimeOwner = this;
-				entry.runtimeUsers = 0;
-				entry.lastUsedFrame = Time.frameCount;
-				orderedEntries.Add(orderKey, entry);
-				return entry;
+				layoutOffset += layout.Indices.Length;
 			}
 			return null;
+		}
+
+		/// <summary>One runtime mesh per entry holding every layout's index stream back to back.
+		/// Vertex data comes from the shared baked mesh via a single Instantiate per entry (not per
+		/// layout); submesh 0 spans the concatenated indices.</summary>
+		Mesh GetOrCreateLayoutMesh () {
+			if (runtimeLayoutMesh != null) return runtimeLayoutMesh;
+			int total = 0;
+			foreach (GpuSpineDrawOrderLayout layout in DrawOrderLayouts)
+				if (layout.Indices != null) total += layout.Indices.Length;
+			int[] combined = new int[total];
+			int offset = 0;
+			foreach (GpuSpineDrawOrderLayout layout in DrawOrderLayouts) {
+				if (layout.Indices == null) continue;
+				Array.Copy(layout.Indices, 0, combined, offset, layout.Indices.Length);
+				offset += layout.Indices.Length;
+			}
+			Mesh mesh = UnityEngine.Object.Instantiate(Mesh);
+			mesh.hideFlags = HideFlags.DontSave;
+			mesh.subMeshCount = 1;
+			mesh.SetTriangles(combined, 0, false, 0);
+			runtimeLayoutMesh = mesh;
+			LayoutMeshesBuilt++;
+			return mesh;
+		}
+
+		/// <summary>Copies a layout's submesh partition with IndexStart rebased into the
+		/// concatenated index stream of <see cref="GetOrCreateLayoutMesh"/>.</summary>
+		static GpuSpineSubmesh[] RebaseSubmeshes (GpuSpineDrawOrderLayout layout, int layoutOffset) {
+			GpuSpineSubmesh[] parts = new GpuSpineSubmesh[layout.Submeshes.Length];
+			for (int i = 0; i < parts.Length; i++) {
+				parts[i] = layout.Submeshes[i];
+				parts[i].IndexStart += layoutOffset;
+			}
+			return parts;
 		}
 
 		public void RetainRuntimeLayout () { if (runtimeOwner != null) runtimeUsers++; }
 		public void ReleaseRuntimeLayout () { if (runtimeOwner != null) runtimeUsers--; }
 
-		void EvictUnusedLayout () {
-			if (orderedEntries.Count < 8) return;
-			string candidate = null;
-			int oldest = int.MaxValue;
-			foreach (var pair in orderedEntries) {
-				if (pair.Value.runtimeUsers == 0 && pair.Value.lastUsedFrame <= oldest) {
-					candidate = pair.Key; oldest = pair.Value.lastUsedFrame;
-				}
-			}
-			if (candidate == null) return;
-			DestroyRuntimeMesh(orderedEntries[candidate]);
-			orderedEntries.Remove(candidate);
-		}
-
-		void DestroyRuntimeMesh (GpuSpineBakedEntry entry) {
-			if (entry.Mesh == null || entry.Mesh == Mesh) return;
-			if (Application.isPlaying) UnityEngine.Object.Destroy(entry.Mesh);
-			else UnityEngine.Object.DestroyImmediate(entry.Mesh);
-		}
-
+		/// <summary>Releases the combined layout mesh and all layout views. Layout views own no mesh
+		/// of their own, so there is exactly one runtime mesh to destroy per entry.</summary>
 		public void ClearRuntimeLayouts () {
+			if (runtimeLayoutMesh != null) {
+				if (Application.isPlaying) UnityEngine.Object.Destroy(runtimeLayoutMesh);
+				else UnityEngine.Object.DestroyImmediate(runtimeLayoutMesh);
+				runtimeLayoutMesh = null;
+			}
 			if (orderedEntries == null) return;
-			foreach (GpuSpineBakedEntry entry in orderedEntries.Values) DestroyRuntimeMesh(entry);
 			orderedEntries.Clear();
 		}
 

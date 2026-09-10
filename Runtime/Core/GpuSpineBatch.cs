@@ -87,7 +87,10 @@ namespace GpuSpine.Core {
 			argsArray[0] = (uint)submesh.IndexCount;   // index count per instance
 			argsArray[1] = 0;                          // instance count, updated per frame
 			argsArray[2] = (uint)submesh.IndexStart;   // start index location
-			argsArray[3] = (uint)entry.Mesh.GetBaseVertex(submeshIndex); // 0 for SetTriangles-built meshes
+			// 0 for SetTriangles-built meshes. Layout-view entries share one combined layout mesh
+			// (subMeshCount 1) whose batches address index ranges through the args buffer instead of
+			// real submeshes, so the base vertex lookup must not index past the mesh's submesh count.
+			argsArray[3] = submeshIndex < entry.Mesh.subMeshCount ? (uint)entry.Mesh.GetBaseVertex(submeshIndex) : 0u;
 			argsArray[4] = 0;                          // reserved
 			EnsureCapacity(InitialInstanceCapacity);
 		}
@@ -117,8 +120,11 @@ namespace GpuSpine.Core {
 				SlicesCreated++;
 			}
 			slice.SetCount(count);
+			// The reported submesh index feeds CommandBuffer.DrawMeshInstancedIndirect, which
+			// validates it against mesh.subMeshCount; batches on a combined layout mesh report
+			// submesh 0 and let the args buffer select the index range (same triangle topology).
 			return new GpuSpineBatchInfo {
-				Mesh = Entry.Mesh, SubmeshIndex = SubmeshIndex,
+				Mesh = Entry.Mesh, SubmeshIndex = Entry.Mesh.subMeshCount > SubmeshIndex ? SubmeshIndex : 0,
 				Material = slice.Material, ArgsBuffer = slice.Args,
 				Bounds = ComputeBounds(start, count), InstanceCount = count
 			};

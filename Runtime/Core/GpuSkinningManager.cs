@@ -65,13 +65,14 @@ namespace GpuSpine {
 
         /// <summary>Monotonic lifecycle counters for churn diagnostics:
         /// [0] ChangeEntry calls, [1] batches created, [2] batches disposed,
-        /// [3] batches parked idle, [4] idle batches reused, [5] draw slices created.</summary>
+        /// [3] batches parked idle, [4] idle batches reused, [5] draw slices created,
+        /// [6] combined layout meshes built.</summary>
         public static int[] GetLifecycleCounters() {
             return new[] {
                 EntryChanges,
                 GpuSpineCameraFrame.BatchesCreated, GpuSpineCameraFrame.BatchesDisposed,
                 GpuSpineCameraFrame.BatchesParked, GpuSpineCameraFrame.BatchesReused,
-                GpuSpineBatch.SlicesCreated
+                GpuSpineBatch.SlicesCreated, GpuSpineBakedEntry.LayoutMeshesBuilt
             };
         }
         static int EntryChanges;
