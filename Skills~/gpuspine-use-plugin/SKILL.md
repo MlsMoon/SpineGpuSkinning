@@ -92,7 +92,7 @@ Editor menus (selection of one or more `SkeletonDataAsset`):
   rebakes when the source fingerprint or entry keys changed.
 - `Tools/GPUSpineSkin/Force Rebake Selected` — clears the fingerprint first, so the
   no-change check cannot skip. Use this to repair containers whose entry meshes were
-  deleted by hand, or when a content change preserved file length and write time.
+  deleted by hand, or when the baked state must be rebuilt without any source change.
 - `Tools/GPUSpineSkin/Log Audit Report` (also `Assets/GpuSpine/Log Audit Report`) —
   logs the graded audit (failures, warnings, dynamic slots and their variants)
   without baking.
@@ -173,6 +173,12 @@ All on `GpuSkeletonRenderer` (`Runtime/GpuSkeletonRenderer.cs`):
 | `IsGpuActive` | property | True while this skeleton is submitted through the GPU instanced path. |
 | `LastAudit` | property | The admittance audit evaluated on enable (null while never audited). |
 | `WriteInstanceData` | event | Per-frame callback to fill the `Custom0`/`Custom1` slots of this instance's draw data (see `references/integration-examples.md`). |
+| `IncludeInRuntimeSwitch` | field | When true, the instance self-registers with `GpuSpineRuntimeSwitch` so host commands can toggle CPU/GPU. Off by default so examples stay out. Unregister happens on destroy, not disable, so a switch-off can re-enable later. |
+| `ApplyCameraRenderingLayerFilter` | field | Honor URP Camera Rendering Layer Filter when submitting. On by default. Cameras that do not enable the filter are unaffected. |
+| `CopyPropertyBlockToCustomData` | field | Copy MeshRenderer MaterialPropertyBlock values into instance Custom0/Custom1 before `WriteInstanceData`. Off by default. |
+| `Custom0Property` | field | Vector property copied into Custom0.xyz (and .w unless `Custom0WProperty` is set). |
+| `Custom0WProperty` | field | Optional float property packed into Custom0.w. |
+| `Custom1Property` | field | Vector property copied into Custom1. |
 
 Removing or disabling the component restores the original CPU path completely (original
 `updateMode`, original `MeshRenderer.enabled`) — zero residue.
@@ -247,6 +253,7 @@ Complete example: `references/integration-examples.md`.
 
 - Enumerate the live batches via `GpuSkinningManager.GetBatches()`
   (`Runtime/Core/GpuSkinningManager.cs`).
+- Resolve a GPU instance from a scene `Renderer` with `GpuSkinningManager.TryGetByRenderer`.
 - Each `GpuSpineBatchInfo` carries `Mesh`, `SubmeshIndex`, `Material`, `ArgsBuffer`,
   `Bounds`, `InstanceCount`.
 - Re-submit with `CommandBuffer.DrawMeshInstancedIndirect`; the batch material already
@@ -275,3 +282,24 @@ Complete example: `references/integration-examples.md`.
   behavior and warning text, and the dynamic slot folding semantics.
 - `references/integration-examples.md` — complete custom shader and custom RenderPass
   examples, including the `WriteInstanceData` callback.
+
+## 自动验证与日志门禁
+
+- `Runtime/GpuSpineDiagnostics.cs` 是两个 const 开关的唯一来源；默认均为 false。
+- `EnableLogging` 只控制已接入的日志调用，不代表停止截图、协程或 CPU/GPU 切换。
+- 宿主自动验证入口必须先检查 `EnableAutomaticValidation`，再检查 EditorPrefs、验证宏或命令行参数。
+  Bootstrap 在创建对象前返回；场景中已有验证组件的 Start 应禁用自身，Update/LateUpdate 不得改渲染状态。
+- 开关不会自动约束未接入的第三方脚本。新增自动截图、冒烟或性能驱动必须接入同一总门禁。
+- 正常 GPU 注册、蒙皮、手动工具和资源烘焙不受自动验证门禁影响。
+- 改 const 后等待宿主程序集重编译；可核对关闭后的 Bootstrap IL 只剩 ret。
+- 测量正常玩法前确认没有自动截图/回读/PNG 编码和 CPU/GPU 对照；关闭 Console 日志不足以净化采样。
+- 完整语义和宿主代码示例见 [插件 README](../../README.md#诊断日志与自动验证总开关)。
+
+## 布局共享后的自定义 Pass 合同
+
+- 资源组不等于 DrawCall；一个资源组可服务同一骨架不同布局的多段绘制。
+- 继续使用 `GetBatches(camera)` 或 `GetBatches(camera, source)`，保留每项的材质、args 和 Mesh 配对。
+- `SubmeshIndex=0` 提供拓扑，实际几何范围来自 args；不要自行用 mesh 子网格索引替换绘制范围。
+- 返回视图和 args 属于当前相机当前帧，不跨帧缓存，不手动释放插件拥有的材质/缓冲。
+- `BatchInstanceIndex` 仅作最近上传组的诊断值；单角色重绘以 `GetBatches(camera, source)` 为准。
+- 绘制顺序变化不会重建整套资源；新骨架/图集/相机仍可初始化资源，需区分启动与稳定运行数据。

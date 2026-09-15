@@ -76,7 +76,7 @@ Upload cadence (`GpuSpineBatch.SubmitFrame`):
 | `args[0]` | Index count per instance (`submesh.IndexCount`) |
 | `args[1]` | Instance count — rewritten every frame |
 | `args[2]` | Start index location (`submesh.IndexStart`) |
-| `args[3]` | Base vertex (`Mesh.GetBaseVertex(submeshIndex)`; 0 for `SetTriangles`-built meshes) |
+| `args[3]` | Base vertex (0 for editor-baked SetTriangles meshes) |
 | `args[4]` | Reserved (0) |
 
 ## Baked vertex streams (prototype mesh)
@@ -110,3 +110,10 @@ Vertex order: static zone first (setup draw order), then every dynamic slot vari
   triangle degenerates to zero area and produces no fragments.
 - Skinned (x, y) keeps the baked z; `GpuSpineSkinToWorld` then applies the instance's
   `localToWorld`.
+
+## 资源所有权与 args 生命周期
+
+布局视图共享同一 ResourceOwner 的兼容上传组；C#/HLSL 字节布局不变。
+每个相机各自维护组和切片池。同一帧不同几何或实例范围使用不同 args，重复查询相同范围复用该槽位。
+下一帧才可重用 args 槽位；偏移材质不可改成其他实例偏移，避免影响已经排队的命令。
+组拥有骨骼等缓冲及偏移材质，切片只拥有 GraphicsBuffer args。组销毁时分别且仅释放一次。

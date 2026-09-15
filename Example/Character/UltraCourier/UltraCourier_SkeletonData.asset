@@ -1,6 +1,6 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
---- !u!43 &-8648553803156450338
+--- !u!43 &-7729331079473520680
 Mesh:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -247,16 +247,16 @@ MonoBehaviour:
       - default/hair
       - forest/hair
       - midnight/hair
-  SourceFingerprint: v1|fmt:5|scale:0.01|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Editor/spine-unity/Editor/GUI/AtlasAsset
-    Icon.png#529:639123467363755628|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Editor/spine-unity/Editor/GUI/SkeletonDataAsset
-    Icon.png#507:639123467364496499|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Asset
-    Types/SkeletonDataAsset.cs#13102:639123467349873269|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Asset
-    Types/SpineAtlasAsset.cs#11503:639123467349893286|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Shaders/BlendModes/Spine-Skeleton-PMA-Additive.shader#2465:639123467365523668|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Shaders/BlendModes/Spine-Skeleton-PMA-Multiply.shader#2487:639123467365533678|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Shaders/BlendModes/Spine-Skeleton-PMA-Screen.shader#2478:639123467365538711|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Shaders/Spine-Skeleton.shader#3461:639123467350148716|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/SkeletonDataModifierAssets/BlendModeMaterials/SkeletonPMAAdditive.mat#938:639123467366155469|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/SkeletonDataModifierAssets/BlendModeMaterials/SkeletonPMAMultiply.mat#1033:639123467366155469|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/SkeletonDataModifierAssets/BlendModeMaterials/SkeletonPMAScreen.mat#1031:639123467366165481|Assets/Plugins/SpineGpuSkinning/Example/Character/UltraCourier/UltraCourier.atlas.txt#6673:639245313593777156|Assets/Plugins/SpineGpuSkinning/Example/Character/UltraCourier/UltraCourier.json#5064400:639245313597498602|Assets/Plugins/SpineGpuSkinning/Example/Character/UltraCourier/UltraCourier.png#178404:639245313593777156|Assets/Plugins/SpineGpuSkinning/Example/Character/UltraCourier/UltraCourier_Atlas.asset#632:639245327757283108|Assets/Plugins/SpineGpuSkinning/Example/Character/UltraCourier/UltraCourier_Material.mat#1333:639245327757293633|Assets/Plugins/SpineGpuSkinning/Runtime/Baking/GpuSpineBakedData.cs#15582:639244728790829328|Assets/Plugins/SpineGpuSkinning/Runtime/Shaders/SpineGpu-URP-Skeleton.shader#2830:639244652704779819
+  SourceFingerprint: v2|fmt:5|scale:0.01|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Editor/spine-unity/Editor/GUI/AtlasAsset
+    Icon.png#529:96f7dea6ea809cdc203b420aaa68941c|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Editor/spine-unity/Editor/GUI/SkeletonDataAsset
+    Icon.png#507:5b1633e1da68662d81317e55aa52ede2|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Asset
+    Types/SkeletonDataAsset.cs#13102:630004363e6804c2dbed41be10e1cbf2|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Asset
+    Types/SpineAtlasAsset.cs#11503:0eb69fc680774db22f44c57ecad602e4|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Shaders/BlendModes/Spine-Skeleton-PMA-Additive.shader#2465:c0bc526c3eeb497f3c2879ff8a740556|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Shaders/BlendModes/Spine-Skeleton-PMA-Multiply.shader#2487:945042f74d5fa04b609f09e0337037f9|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Shaders/BlendModes/Spine-Skeleton-PMA-Screen.shader#2478:8acbd34180d4ac3193bfeea7200edbe8|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/Shaders/Spine-Skeleton.shader#3461:8a188b2742159cd3544d92a13e11243f|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/SkeletonDataModifierAssets/BlendModeMaterials/SkeletonPMAAdditive.mat#938:37eda223e7ae7fa1d67d451c64122ea7|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/SkeletonDataModifierAssets/BlendModeMaterials/SkeletonPMAMultiply.mat#1033:7efda6976e1f3d43d6f0f0a275c758f6|Assets/Plugins/ActFramework_ByHZR/Packages/BuiltInTools/Spine/Runtime/spine-unity/SkeletonDataModifierAssets/BlendModeMaterials/SkeletonPMAScreen.mat#1031:f6ce2c5bf511f77816781e64e046dad3|Assets/Plugins/SpineGpuSkinning/Example/Character/UltraCourier/UltraCourier.atlas.txt#6673:d9d482f6876c40059a25a44f88d4c9a9|Assets/Plugins/SpineGpuSkinning/Example/Character/UltraCourier/UltraCourier.json#5064400:13b2d95f6e74007359fa78670e19bf57|Assets/Plugins/SpineGpuSkinning/Example/Character/UltraCourier/UltraCourier.png#178404:a98b66223db54dbeb5a566493569033d|Assets/Plugins/SpineGpuSkinning/Example/Character/UltraCourier/UltraCourier_Atlas.asset#632:bebb083cc894160704bebe5c0fe1c28d|Assets/Plugins/SpineGpuSkinning/Example/Character/UltraCourier/UltraCourier_Material.mat#1333:5496298441822f7708e2542191c513b4|Assets/Plugins/SpineGpuSkinning/Runtime/Baking/GpuSpineBakedData.cs#17568:c95e4a0fd353805be2aae21523bce0f5|Assets/Plugins/SpineGpuSkinning/Runtime/Shaders/SpineGpu-URP-Skeleton.shader#2830:71474f81f0563605cb8c34d3f5c9cb8c
   Entries:
   - Key: 754F6D7B889F7C9F
     DisplayName: default
     SkinNames: []
-    Mesh: {fileID: -637396978311334176}
+    Mesh: {fileID: 6011246231307268191}
     Submeshes:
     - PageMaterial: {fileID: 2100000, guid: 07aebd67453b4304ab1f5c6681a28a75, type: 2}
       IndexStart: 0
@@ -9807,7 +9807,7 @@ MonoBehaviour:
     DisplayName: forest
     SkinNames:
     - forest
-    Mesh: {fileID: -5086361747949525975}
+    Mesh: {fileID: 2008799700067735850}
     Submeshes:
     - PageMaterial: {fileID: 2100000, guid: 07aebd67453b4304ab1f5c6681a28a75, type: 2}
       IndexStart: 0
@@ -28642,7 +28642,7 @@ MonoBehaviour:
     DisplayName: midnight
     SkinNames:
     - midnight
-    Mesh: {fileID: -8648553803156450338}
+    Mesh: {fileID: -7729331079473520680}
     Submeshes:
     - PageMaterial: {fileID: 2100000, guid: 07aebd67453b4304ab1f5c6681a28a75, type: 2}
       IndexStart: 0
@@ -47474,7 +47474,36 @@ MonoBehaviour:
       m_Extent: {x: 0.056874998, y: 0.038666647, z: 0}
     UsedBones: 00010001000101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101
   DeclaredCombos: []
---- !u!43 &-5086361747949525975
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f1b3b4b945939a54ea0b23d3396115fb, type: 3}
+  m_Name: UltraCourier_SkeletonData
+  m_EditorClassIdentifier: 
+  atlasAssets:
+  - {fileID: 11400000, guid: b19829a18c170754c8139f3f1f63a1e3, type: 2}
+  scale: 0.01
+  skeletonJSON: {fileID: 4900000, guid: f22d6d93b0812dd4f800f6af7fb2abca, type: 3}
+  isUpgradingBlendModeMaterials: 0
+  blendModeMaterials:
+    requiresBlendModeMaterials: 0
+    applyAdditiveMaterial: 0
+    additiveMaterials: []
+    multiplyMaterials: []
+    screenMaterials: []
+  skeletonDataModifiers: []
+  fromAnimation: []
+  toAnimation: []
+  duration: []
+  defaultMix: 0.2
+  controller: {fileID: 0}
+--- !u!43 &2008799700067735850
 Mesh:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -47639,7 +47668,7 @@ Mesh:
     offset: 0
     size: 0
     path: 
---- !u!43 &-637396978311334176
+--- !u!43 &6011246231307268191
 Mesh:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -47804,32 +47833,3 @@ Mesh:
     offset: 0
     size: 0
     path: 
---- !u!114 &11400000
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f1b3b4b945939a54ea0b23d3396115fb, type: 3}
-  m_Name: UltraCourier_SkeletonData
-  m_EditorClassIdentifier: 
-  atlasAssets:
-  - {fileID: 11400000, guid: b19829a18c170754c8139f3f1f63a1e3, type: 2}
-  scale: 0.01
-  skeletonJSON: {fileID: 4900000, guid: f22d6d93b0812dd4f800f6af7fb2abca, type: 3}
-  isUpgradingBlendModeMaterials: 0
-  blendModeMaterials:
-    requiresBlendModeMaterials: 0
-    applyAdditiveMaterial: 0
-    additiveMaterials: []
-    multiplyMaterials: []
-    screenMaterials: []
-  skeletonDataModifiers: []
-  fromAnimation: []
-  toAnimation: []
-  duration: []
-  defaultMix: 0.2
-  controller: {fileID: 0}

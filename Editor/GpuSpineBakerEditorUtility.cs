@@ -1,7 +1,8 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using GpuSpine.Baking;
 using Spine;
@@ -47,7 +48,7 @@ namespace GpuSpine.Editor {
 			if (asset == null) throw new ArgumentNullException("asset");
 			string path = AssetDatabase.GetAssetPath(asset);
 			if (string.IsNullOrEmpty(path)) {
-				Debug.LogWarning("GpuSpine bake skipped: the SkeletonDataAsset is not persisted.", asset);
+				if (GpuSpineDiagnostics.EnableLogging) Debug.LogWarning("GpuSpine bake skipped: the SkeletonDataAsset is not persisted.", asset);
 				return null;
 			}
 			string guid = AssetDatabase.AssetPathToGUID(path);
@@ -114,7 +115,7 @@ namespace GpuSpine.Editor {
 			EditorUtility.SetDirty(container);
 			EditorUtility.SetDirty(asset);
 			AssetDatabase.SaveAssets();
-			Debug.Log("GpuSpine baked '" + path + "': " + entries.Count + " entries, audit "
+			if (GpuSpineDiagnostics.EnableLogging) Debug.Log("GpuSpine baked '" + path + "': " + entries.Count + " entries, audit "
 				+ (audit.Passed ? "passed" : "FAILED (" + audit.Failures.Count + " failure(s))")
 				+ (audit.DynamicSlots.Count > 0 ? ", " + audit.DynamicSlots.Count + " dynamic slot(s)" : "")
 				+ (audit.Warnings.Count > 0 ? ", " + audit.Warnings.Count + " warning(s)" : "") + ".", asset);
@@ -123,8 +124,8 @@ namespace GpuSpine.Editor {
 
 		/// <summary>
 		/// Invalidates the source fingerprint so the no-change check cannot skip, then rebakes.
-		/// Use this when the baked meshes were deleted by hand or the fingerprint missed a content
-		/// change that preserved file length and write time.
+		/// Use this when the baked meshes were deleted by hand or the baked state must be rebuilt
+		/// without any source content change.
 		/// </summary>
 		public static GpuSpineBakedData ForceRebake (SkeletonDataAsset asset) {
 			if (asset == null) throw new ArgumentNullException("asset");
@@ -160,7 +161,7 @@ namespace GpuSpine.Editor {
 					GpuSpineComboDeclaration combo = combos[i];
 					if (combo == null || combo.SkinNames == null || combo.SkinNames.Length == 0) continue;
 					if (!SkinsExist(data, combo.SkinNames)) {
-						Debug.LogWarning("GpuSpine bake skips declared combination '" + combo.DisplayName
+						if (GpuSpineDiagnostics.EnableLogging) Debug.LogWarning("GpuSpine bake skips declared combination '" + combo.DisplayName
 							+ "': a skin name does not exist in the SkeletonData.", container);
 						continue;
 					}
@@ -282,30 +283,43 @@ namespace GpuSpine.Editor {
 
 		/// <summary>
 		/// Fingerprint of the inputs that change the baked output: the dependency source files
-		/// (skeleton, atlas, textures — path, length and last write time) plus the SkeletonDataAsset
+		/// (skeleton, atlas, textures — path, length and content hash) plus the SkeletonDataAsset
 		/// scale. The SkeletonDataAsset's own .asset file is excluded on purpose: the bake itself saves
-		/// it, and including it would defeat the no-change check and loop the import. A content change
-		/// that preserves both file length and write time is not detected (accepted, documented); the
-		/// manual Rebake menu covers it.
+		/// it, and including it would defeat the no-change check and loop the import. The content hash
+		/// keeps the fingerprint stable across VCS checkouts and branch switches (which rewrite file
+		/// times without changing content), so unchanged sources no longer trigger spurious rebakes.
 		/// </summary>
 		static string ComputeSourceFingerprint (SkeletonDataAsset asset, string path) {
 			string projectRoot = Directory.GetParent(Application.dataPath).FullName;
 			string[] dependencies = AssetDatabase.GetDependencies(path, true);
 			Array.Sort(dependencies, StringComparer.Ordinal);
 			StringBuilder builder = new StringBuilder(dependencies.Length * 64);
-            builder.Append("v1|fmt:").Append(GpuSpineBaker.BakeFormatVersion).Append("|scale:").Append(asset.scale.ToString("R", CultureInfo.InvariantCulture));
+            builder.Append("v2|fmt:").Append(GpuSpineBaker.BakeFormatVersion).Append("|scale:").Append(asset.scale.ToString("R", CultureInfo.InvariantCulture));
 			for (int i = 0; i < dependencies.Length; i++) {
 				string dependency = dependencies[i];
 				if (dependency == path) continue;
 				builder.Append('|').Append(dependency).Append('#');
-				FileInfo file = new FileInfo(Path.Combine(projectRoot, dependency));
-				if (file.Exists)
-					builder.Append(file.Length.ToString(CultureInfo.InvariantCulture)).Append(':')
-						.Append(file.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture));
+				string fullPath = Path.Combine(projectRoot, dependency);
+				if (File.Exists(fullPath))
+					builder.Append(new FileInfo(fullPath).Length.ToString(CultureInfo.InvariantCulture)).Append(':')
+						.Append(ComputeContentHash(fullPath));
 				else
 					builder.Append("missing");
 			}
 			return builder.ToString();
+		}
+
+		/// <summary>MD5 content hash of one dependency file as lowercase hex. MD5 is used as a fast
+		/// content address for change detection only, not for security.</summary>
+		static string ComputeContentHash (string fullPath) {
+			using (MD5 md5 = MD5.Create())
+			using (FileStream stream = File.OpenRead(fullPath)) {
+				byte[] hash = md5.ComputeHash(stream);
+				StringBuilder hex = new StringBuilder(hash.Length * 2);
+				for (int i = 0; i < hash.Length; i++)
+					hex.Append(hash[i].ToString("x2", CultureInfo.InvariantCulture));
+				return hex.ToString();
+			}
 		}
 	}
 }

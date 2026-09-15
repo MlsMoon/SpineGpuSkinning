@@ -4,7 +4,7 @@
 
 为 [spine-unity](http://esotericsoftware.com/spine-unity) 的 SkeletonAnimation 提供 GPU 蒙皮：把每帧 CPU 蒙皮 / 网格重建 / 顶点上传改到 GPU 顶点着色器，且不修改任何 Spine 源码。
 
-> CPU 继续做骨骼求解（AnimationState、混合、事件、物理、BoneFollower、运行时换肤）。GPU 负责顶点蒙皮、网格组装和上传。共享同一图集页的实例走一次 `DrawMeshInstancedIndirect`。
+> CPU 继续做骨骼求解（AnimationState、混合、事件、物理、BoneFollower、运行时换肤）。GPU 负责顶点蒙皮、网格组装和上传。兼容实例共享上传资源，绘制范围仍保留逐角色透明排序。
 
 ## 环境要求
 
@@ -136,3 +136,17 @@ Profiler 的 CPU、Render Thread、GPU 时间、GC 与实际 DrawCall 判断。
 ## 许可
 
 MIT（见 `LICENSE`）。Spine 运行时仍受 Spine Runtimes License 约束，不属于本仓库。
+
+## 布局资源共享与冷切换
+
+- 每个相机独立管理资源组，键包含骨架 ResourceOwner、实际 Mesh、图集页材质、覆盖材质及渲染状态。
+  同一骨架的不同绘制顺序视图共用骨骼/实例缓冲，布局切换只更新索引范围。
+- 兼容布局保留成员；页面集合、Mesh 或状态不兼容时仍按完整注册路径处理。
+- 多段角色始终按角色顺序逐段绘制；仅单段、几何范围一致、实例连续时合并绘制。
+- args 在同帧按几何与实例范围独立分配槽位，跨帧按绘制峰值复用；不按历史布局无限累积。
+  同帧不得改写已有槽位，否则正常绘制和单角色描边会互相覆盖。
+- 材质按资源组内实例偏移共享，扩容后重绑全部偏移材质；不再为每个布局段复制材质。
+- `GetBatches(camera, source)` 返回可直接重绘的范围；`SubmeshIndex=0` 提供三角形拓扑，
+  实际范围由 args 的 IndexStart/IndexCount 决定，调用者必须保留返回的材质与 args 配对。
+- 初次加载新的骨架、图集或相机仍需要资源初始化。此优化消除布局冷切换的重复创建，
+  不承诺全游戏零分配、零 GC，也不把 Editor 的材质回调成本等同于 Player 成本。

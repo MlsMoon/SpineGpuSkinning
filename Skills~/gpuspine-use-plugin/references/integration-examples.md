@@ -207,12 +207,12 @@ grows.
 
 Contract (from `Runtime/Core/GpuSkinningManager.cs` and `Runtime/Core/GpuSpineBatch.cs`):
 
-- `GpuSkinningManager.GetBatches()` returns read-only views of the batches submitted this
+- `GpuSkinningManager.GetBatches(camera)` returns read-only views of the draws submitted this
   frame (batches with zero submitted instances are skipped). **The list is reused — do not
   cache it across frames.**
 - `GpuSpineBatchInfo` fields:
   - `Mesh` — the baked entry's mesh;
-  - `SubmeshIndex` — submesh this batch draws (one batch per atlas page boundary);
+  - `SubmeshIndex` — topology selector (0); actual index range is carried by ArgsBuffer;
   - `Material` — the cloned batch material **with the bound skinning buffers**;
   - `ArgsBuffer` — `uint[5]` indirect args buffer (indexCount, instanceCount, indexStart,
     baseVertex, 0);
@@ -263,7 +263,7 @@ public sealed class GpuSpineMaskFeature : ScriptableRendererFeature {
         }
 
         public override void Execute (ScriptableRenderContext context, ref RenderingData renderingData) {
-            IReadOnlyList<GpuSpineBatchInfo> batches = GpuSkinningManager.GetBatches();
+            IReadOnlyList<GpuSpineBatchInfo> batches = GpuSkinningManager.GetBatches(renderingData.cameraData.camera);
             if (batches.Count == 0) return;
 
             CommandBuffer cmd = CommandBufferPool.Get("GpuSpine Mask");
@@ -283,7 +283,7 @@ public sealed class GpuSpineMaskFeature : ScriptableRendererFeature {
 }
 ```
 
-✅ Read `GetBatches()` fresh inside `Execute`, use the batch material as provided.
+✅ Read `GetBatches(renderingData.cameraData.camera)` fresh inside `Execute`, use the batch material as provided.
 ❌ Do not cache the list, the materials or the buffers across frames: batches are disposed
 when their last instance unregisters (cloned material destroyed, buffers released), and
 buffer bindings are refreshed whenever a batch grows.

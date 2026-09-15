@@ -39,7 +39,7 @@ SkeletonAnimation (unmodified Spine runtime)
   v
   4. SUBMISSION LAYER (per frame, per batch) — Runtime/Core/GpuSkinningManager.cs,
      Runtime/Core/GpuSpineBatch.cs
-     [DefaultExecutionOrder(32000)] LateUpdate, later than every UpdateComplete:
+     SRP beginCameraRendering, after skeleton updates:
      per-(entry, submesh) batches, back-to-front CPU sort, palette/instance/dynSlot
      buffer uploads, Graphics.DrawMeshInstancedIndirect. Zero cost with no registrations.
      Layouts: references/buffer-layouts.md
@@ -76,16 +76,15 @@ File map:
      `Slot.Attachment.Name` (`0xFFFFFFFF` = fold all) → `dynamicSlotsDirty`;
    - recompute the content key; on change, move to the new entry's batches
      (`GpuSkinningManager.ChangeEntry`) or restore the CPU path.
-3. `GpuSkinningManager.LateUpdate` (execution order 32000, after every UpdateComplete):
+3. `GpuSkinningManager.BeginCamera` (SRP beginCameraRendering, after skeleton updates):
    - build the submission set per batch (`ShouldSubmit` = gpuActive && Visible && enabled);
    - stable insertion sort back-to-front by the batch's sort mode (first submitted
      instance decides the mode);
    - upload palette/dynSlot buffers only when dirty (reorder, membership change, count
      change, or a dirty instance); instance data is uploaded every frame (untracked);
-   - update args `uint[5]` (instanceCount), compute union bounds (+1 unit margin);
-   - `Graphics.DrawMeshInstancedIndirect(mesh, submesh, clonedMaterial, bounds, args, 0,
-     null, ShadowCastingMode.Off, true, layer)` — shadow casting off (the indirect path
-     cannot join the cullResults shadow passes), receiving on.
+   - 每帧按实际绘制范围复用 args 槽位，按实例偏移复用材质；不同范围同帧不能改写同一槽位。
+   - 多段角色严格逐角色展开；单段且几何一致时才能合并连续实例。
+   - 使用 Graphics.RenderMeshIndirect 提交；后续自定义 Pass 复用返回的材质/args 配对。
 
 ## Design invariants (do not break)
 
@@ -103,9 +102,8 @@ File map:
 - **Keys are content hashes** (`GpuSpineBakeKey`, FNV-1a over the per-slot resolved setup
   attachment names), stable across sessions and machines. Editor baking and runtime
   lookup MUST keep using this single implementation.
-- **Batch = (baked entry, submesh index)**. A submesh is an atlas page material boundary,
-  so this equals the CPU path's per-page batching. The page material reference is the
-  batch key ingredient.
+- **资源组与绘制范围分离**：组键为 ResourceOwner、实际 Mesh、图集材质和渲染状态。
+  布局 entry 不再各自拥有一套缓冲；通过独立 args 选择其 IndexStart/IndexCount。
 - **Transparent rendering relies on the painter's algorithm within a batch**: the
   instance buffer write order is the draw order, so batches are sorted on the CPU before
   upload; a sort that moved instances must trigger a palette re-upload.
@@ -127,8 +125,8 @@ File map:
    the deferred second pass then hits the no-change check (`SourceFingerprint` +
    entry keys) and returns without saving, terminating the import loop. The fingerprint
    deliberately excludes the SkeletonDataAsset's own `.asset` file — including it would
-   loop forever. A content change preserving both file length and write time is not
-   detected (accepted, documented; the manual Rebake menu covers it).
+   loop forever. Dependency entries carry a content hash (v2), so VCS checkouts and
+   branch switches that only rewrite file times no longer trigger spurious rebakes.
 4. **`Skin.AddSkin` order is the content key.** A declared combination whose `SkinNames`
    order differs from the runtime `AddSkin` order resolves different (or equal-but-mis-
    labeled) attachments. Editor keys are precomputed with the same
@@ -152,29 +150,11 @@ already-compiled spine/URP assembly DLLs from `Library/ScriptAssemblies/`, and
 `spine-csharp`, `spine-unity`, `Unity.RenderPipelines.Universal.Runtime`; the editor
 assembly additionally references the runtime assembly):
 
-```bat
-set UNITY_MANAGED=C:\Program Files\Unity\Hub\Editor\2022.3.x\Editor\Data\Managed
-set SA=Library\ScriptAssemblies
-
-csc -nologo -target:library -nostdlib -noconfig ^
-  -r:"%UNITY_MANAGED%\UnityEngine.dll" ^
-  -r:"%UNITY_MANAGED%\UnityEngine\CoreModule.dll" ^
-  -r:"%UNITY_MANAGED%\UnityEngine\UnityEngine.CoreModule.dll" ^
-  -r:"%SA%\spine-csharp.dll" -r:"%SA%\spine-unity.dll" ^
-  -r:"%SA%\Unity.RenderPipelines.Universal.Runtime.dll" ^
-  -r:"%UNITY_MANAGED%\NetStandard\ref\2.1.0\netstandard.dll" ^
-  -out:%TEMP%\GpuSpine.Runtime.dll ^
-  Runtime\GpuSkeletonRenderer.cs Runtime\Core\*.cs Runtime\Baking\*.cs
-
-csc -nologo -target:library -nostdlib -noconfig ^
-  -r:"%UNITY_MANAGED%\UnityEngine.dll" -r:"%UNITY_MANAGED%\UnityEditor.dll" ^
-  -r:"%SA%\spine-csharp.dll" -r:"%SA%\spine-unity.dll" ^
-  -r:"%SA%\Unity.RenderPipelines.Universal.Runtime.dll" ^
-  -r:"%UNITY_MANAGED%\NetStandard\ref\2.1.0\netstandard.dll" ^
-  -r:%TEMP%\GpuSpine.Runtime.dll ^
-  -out:%TEMP%\GpuSpine.Editor.dll ^
-  Editor\GpuSpineBakeProcessor.cs Editor\GpuSpineBakerEditorUtility.cs Editor\GpuSpineEditorMenu.cs
-```
+宿主工程先执行一次 Unity 编译，然后从 `Library/Bee/artifacts/` 读取当前生成的
+`GpuSpine.Runtime.rsp` / `GpuSpine.Editor.rsp` 与实际编译器命令。
+直接编译必须复用当前源码清单、define 与依赖；包括 `GpuSpineDiagnostics.cs`，不能沿用旧文件清单。
+Unity Editor 和编译器位置在运行时发现，不把机器安装路径写入文档。
+临时编译输出放宿主 Library 或系统临时目录，不覆盖正在使用的 ScriptAssemblies。
 
 Exact UnityEngine module DLL layout varies by editor version — let Unity compile once,
 then reuse the reference list from a fresh `Library/ScriptAssemblies` plus the editor's
@@ -211,3 +191,25 @@ checklist in `references/skinning-semantics.md`.
   Spine CPU path (vertex orders, expansion formats, color/z rules, content key).
 - `references/buffer-layouts.md` — C#/HLSL struct layouts, buffer index formulas, args
   buffer, TEXCOORD vertex streams, binding rules.
+
+## 自动验证与日志门禁
+
+- `Runtime/GpuSpineDiagnostics.cs` 是两个 const 开关的唯一来源；默认均为 false。
+- `EnableLogging` 只控制已接入的日志调用，不代表停止截图、协程或 CPU/GPU 切换。
+- 宿主自动验证入口必须先检查 `EnableAutomaticValidation`，再检查 EditorPrefs、验证宏或命令行参数。
+  Bootstrap 在创建对象前返回；场景中已有验证组件的 Start 应禁用自身，Update/LateUpdate 不得改渲染状态。
+- 开关不会自动约束未接入的第三方脚本。新增自动截图、冒烟或性能驱动必须接入同一总门禁。
+- 正常 GPU 注册、蒙皮、手动工具和资源烘焙不受自动验证门禁影响。
+- 改 const 后等待宿主程序集重编译；可核对关闭后的 Bootstrap IL 只剩 ret。
+- 测量正常玩法前确认没有自动截图/回读/PNG 编码和 CPU/GPU 对照；关闭 Console 日志不足以净化采样。
+- 完整语义和宿主代码示例见 [插件 README](../../README.md#诊断日志与自动验证总开关)。
+
+## 共享资源维护约束
+
+- `GpuSpineBakedEntry.ResourceOwner` 只归一化数据身份，组键还必须包含实际 Mesh，防止容器释放后复用旧网格资源。
+- `GpuSpineCameraFrame.ChangeLayout` 对兼容页面集合只替换布局引用；其他变化完整解除/注册。
+- `GpuSpineSliceKey` 包含 indexStart/indexCount/start/count；frameSlices 每帧清理，slicePool 按实际绘制峰值复用。
+- `GpuSpineDrawSlice` 仅拥有 args，借用组的偏移材质；材质由组统一销毁，禁止切片重复销毁。
+- `GetBatches(camera, source)` 的额外单实例查询不能覆盖已提交的合并实例 args；校验时应回读前后 args。
+- 骨骼/动态槽/变形数据的尺寸与版本合同仍属于同一 ResourceOwner；扩容必须重绑所有偏移材质并标记上传失效。
+- 使用真实布局切换、1/多实例、换肤、CPU 回退和多相机核对几何范围与骨骼缓冲，不只观察平均帧率。

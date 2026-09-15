@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Spine.Unity;
@@ -210,6 +210,9 @@ namespace GpuSpine.Baking {
 			}
 			return parts;
 		}
+
+		/// <summary>布局视图共享骨架数据和 GPU 缓冲所有者，索引范围由绘制切片持有。</summary>
+		internal GpuSpineBakedEntry ResourceOwner => runtimeOwner ?? this;
 
 		public void RetainRuntimeLayout () { if (runtimeOwner != null) runtimeUsers++; }
 		public void ReleaseRuntimeLayout () { if (runtimeOwner != null) runtimeUsers--; }

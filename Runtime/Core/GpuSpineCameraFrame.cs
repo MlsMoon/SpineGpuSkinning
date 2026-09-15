@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using GpuSpine.Baking;
@@ -10,7 +10,8 @@ namespace GpuSpine.Core {
     internal sealed class GpuSpineCameraFrame : IDisposable {
 		struct BatchKey : IEquatable<BatchKey> {
 			readonly GpuSpineBakedEntry entry;
-			readonly int submeshIndex;
+			readonly Mesh mesh;
+			readonly Material pageMaterial;
 			readonly Material materialOverride;
 			readonly int layer;
 			readonly uint renderingLayer;
@@ -18,8 +19,9 @@ namespace GpuSpine.Core {
 			readonly GpuSpineSortMode sortMode;
 
 			public BatchKey (GpuSpineBakedEntry entry, int submeshIndex, GpuSkeletonRenderer source) {
-				this.entry = entry;
-				this.submeshIndex = submeshIndex;
+				this.entry = entry.ResourceOwner;
+				mesh = entry.Mesh;
+				pageMaterial = entry.Submeshes[submeshIndex].PageMaterial;
 				materialOverride = source.MaterialOverride;
 				layer = source.SourceRenderer.gameObject.layer;
 				renderingLayer = source.SourceRenderer.renderingLayerMask;
@@ -28,7 +30,7 @@ namespace GpuSpine.Core {
 			}
 
 			public bool Equals (BatchKey other) {
-				return ReferenceEquals(entry, other.entry) && submeshIndex == other.submeshIndex
+				return ReferenceEquals(entry, other.entry) && ReferenceEquals(mesh, other.mesh) && ReferenceEquals(pageMaterial, other.pageMaterial)
 					&& ReferenceEquals(materialOverride, other.materialOverride) && layer == other.layer && renderingLayer == other.renderingLayer && shadows == other.shadows && sortMode == other.sortMode;
 			}
 
@@ -37,7 +39,7 @@ namespace GpuSpine.Core {
 			}
 
 			public override int GetHashCode () {
-				return RuntimeHelpers.GetHashCode(entry) ^ (submeshIndex * 31) ^ (layer * 397)
+				return RuntimeHelpers.GetHashCode(entry) ^ RuntimeHelpers.GetHashCode(mesh) ^ (ReferenceEquals(pageMaterial, null) ? 0 : RuntimeHelpers.GetHashCode(pageMaterial)) ^ (layer * 397)
 					^ (int)sortMode ^ (ReferenceEquals(materialOverride, null) ? 0 : RuntimeHelpers.GetHashCode(materialOverride));
 			}
 		}
@@ -57,6 +59,8 @@ namespace GpuSpine.Core {
 		readonly Dictionary<BatchKey, GpuSpineBatch> idleBatches = new();
 		readonly List<BatchKey> idleOrder = new(); // Oldest first; eviction order once the pool is full.
         readonly Dictionary<GpuSkeletonRenderer, List<GpuSpineBatch>> batchesByInstance = new();
+        readonly Dictionary<GpuSkeletonRenderer, GpuSpineBakedEntry> entriesByInstance = new();
+        readonly Dictionary<GpuSkeletonRenderer, BatchKey> sourceKeys = new();
         readonly List<GpuSpineBatchInfo> batchInfoCache = new();
         readonly List<GpuSpineBatchInfo> selectedDraws = new();
         readonly List<GpuSkeletonRenderer> orderedSources = new();
@@ -66,15 +70,16 @@ namespace GpuSpine.Core {
         public GpuSpineCameraFrame(Camera camera) { this.camera = camera; }
         public IReadOnlyList<GpuSpineBatchInfo> Draws => batchInfoCache;
 
-        public void Prepare(IReadOnlyDictionary<GpuSkeletonRenderer, GpuSpineBakedEntry> sources) {
+        public void Prepare(Dictionary<GpuSkeletonRenderer, GpuSpineBakedEntry> sources) {
             if (preparedFrame == Time.frameCount) return;
             preparedFrame = Time.frameCount;
+            using (GpuSpineCpuDiagnostics.Membership.Auto()) {
             batchInfoCache.Clear();
             removed.Clear();
             foreach (var pair in batchesByInstance) {
                 if (pair.Key == null || !sources.TryGetValue(pair.Key, out var entry) ||
-                    !pair.Key.ShouldSubmitTo(camera) || !ReferenceEquals(pair.Value[0].Entry, entry) ||
-                    !keysByBatch[pair.Value[0]].Equals(new BatchKey(entry, 0, pair.Key))) removed.Add(pair.Key);
+                    !pair.Key.ShouldSubmitTo(camera) || !ReferenceEquals(entriesByInstance[pair.Key], entry) ||
+                    !sourceKeys[pair.Key].Equals(new BatchKey(entry, 0, pair.Key))) removed.Add(pair.Key);
             }
             foreach (var source in removed) Remove(source);
             foreach (var pair in sources) {
@@ -90,19 +95,23 @@ namespace GpuSpine.Core {
                             Material material = CreateBatchMaterial(pair.Value.Submeshes[i].PageMaterial, pair.Key);
                             if (material == null) continue;
                             material.SetInt("_GpuSpineRenderingLayerMask", unchecked((int)pair.Key.SourceRenderer.renderingLayerMask));
-                            batch = new GpuSpineBatch(pair.Value, i, material);
+                            batch = new GpuSpineBatch(pair.Value, material);
                             BatchesCreated++;
                         }
                         batches.Add(key, batch); keysByBatch.Add(batch, key);
                     }
-                    batch.Add(pair.Key); joined.Add(batch);
+                    if (!joined.Contains(batch)) { batch.Add(pair.Key); joined.Add(batch); }
                 }
                 if (joined.Count > 0) {
                     pair.Value.RetainRuntimeLayout();
                     batchesByInstance.Add(pair.Key, joined);
+                    entriesByInstance.Add(pair.Key, pair.Value);
+                    sourceKeys.Add(pair.Key, new BatchKey(pair.Value, 0, pair.Key));
                 }
             }
+            }
             foreach (GpuSpineBatch batch in batches.Values) batch.PrepareFrame(camera);
+            using (GpuSpineCpuDiagnostics.CameraSort.Auto()) {
             orderedSources.Clear();
             foreach (var source in batchesByInstance.Keys) orderedSources.Add(source);
 			for (int i = 1; i < orderedSources.Count; i++) {
@@ -114,34 +123,40 @@ namespace GpuSpine.Core {
 				}
 				orderedSources[j + 1] = source;
 			}
-			for (int i = 0; i < orderedSources.Count;) {
-				GpuSkeletonRenderer source = orderedSources[i];
-				List<GpuSpineBatch> joined = batchesByInstance[source];
-				int count = 1;
-				if (joined.Count == 1) {
-					GpuSpineBatch batch = joined[0];
-					int start = batch.FindSourceIndex(source);
-					while (i + count < orderedSources.Count) {
-						List<GpuSpineBatch> next = batchesByInstance[orderedSources[i + count]];
-						if (next.Count != 1 || next[0] != batch ||
-							batch.FindSourceIndex(orderedSources[i + count]) != start + count) break;
-						count++;
-					}
-				}
-				foreach (GpuSpineBatch batch in joined) {
-					GpuSpineBatchInfo draw = batch.GetSlice(batch.FindSourceIndex(source), count);
-					batchInfoCache.Add(draw);
-					MeshRenderer renderer = source.SourceRenderer;
-					var parameters = new RenderParams(draw.Material) {
-						camera = camera, layer = renderer.gameObject.layer,
-						renderingLayerMask = renderer.renderingLayerMask, worldBounds = draw.Bounds,
-						shadowCastingMode = renderer.shadowCastingMode, receiveShadows = renderer.receiveShadows,
-						reflectionProbeUsage = renderer.reflectionProbeUsage, rendererPriority = renderer.rendererPriority
-					};
-					Graphics.RenderMeshIndirect(parameters, draw.Mesh, draw.ArgsBuffer);
-				}
-				i += count;
-			}
+            }
+            for (int i = 0; i < orderedSources.Count;) {
+                GpuSkeletonRenderer source = orderedSources[i];
+                GpuSpineBakedEntry entry = entriesByInstance[source];
+                int count = 1;
+                // 只有单段且几何范围一致才合并实例，多段严格保持整只角色的画家顺序。
+                if (entry.Submeshes.Length == 1) {
+                    GpuSpineBatch batch = batchesByInstance[source][0];
+                    int start = batch.FindSourceIndex(source);
+                    while (i + count < orderedSources.Count) {
+                        GpuSkeletonRenderer next = orderedSources[i + count];
+                        GpuSpineBakedEntry nextEntry = entriesByInstance[next];
+                        if (nextEntry.Submeshes.Length != 1 || batchesByInstance[next][0] != batch ||
+                            entry.Submeshes[0].IndexStart != nextEntry.Submeshes[0].IndexStart ||
+                            entry.Submeshes[0].IndexCount != nextEntry.Submeshes[0].IndexCount ||
+                            batch.FindSourceIndex(next) != start + count) break;
+                        count++;
+                    }
+                }
+                for (int part = 0; part < entry.Submeshes.Length; part++) {
+                    if (!batches.TryGetValue(new BatchKey(entry, part, source), out GpuSpineBatch batch)) continue;
+                    GpuSpineBatchInfo draw = batch.GetSlice(entry.Submeshes[part], batch.FindSourceIndex(source), count);
+                    batchInfoCache.Add(draw);
+                    MeshRenderer renderer = source.SourceRenderer;
+                    var parameters = new RenderParams(draw.Material) {
+                        camera = camera, layer = renderer.gameObject.layer,
+                        renderingLayerMask = renderer.renderingLayerMask, worldBounds = draw.Bounds,
+                        shadowCastingMode = renderer.shadowCastingMode, receiveShadows = renderer.receiveShadows,
+                        reflectionProbeUsage = renderer.reflectionProbeUsage, rendererPriority = renderer.rendererPriority
+                    };
+                    using (GpuSpineCpuDiagnostics.Draw.Auto()) Graphics.RenderMeshIndirect(parameters, draw.Mesh, draw.ArgsBuffer);
+                }
+                i += count;
+            }
             preparedFrame = Time.frameCount;
 		}
 
@@ -157,11 +172,34 @@ namespace GpuSpine.Core {
             selectedDraws.Clear();
             if (!source.ShouldSubmitTo(camera) || !batchesByInstance.TryGetValue(source, out var joined))
                 return selectedDraws;
-            foreach (var batch in joined) {
+            GpuSpineBakedEntry entry = entriesByInstance[source];
+            for (int part = 0; part < entry.Submeshes.Length; part++) {
+                if (!batches.TryGetValue(new BatchKey(entry, part, source), out GpuSpineBatch batch)) continue;
                 int index = batch.FindSourceIndex(source);
-                if (index >= 0) selectedDraws.Add(batch.GetSlice(index, 1));
+                if (index >= 0) selectedDraws.Add(batch.GetSlice(entry.Submeshes[part], index, 1));
             }
             return selectedDraws;
+        }
+
+        /// <summary>仅绘制范围变化时保留成员与缓冲，避免每次动画换序重新分配 joined 列表。</summary>
+        public void ChangeLayout(GpuSkeletonRenderer source, GpuSpineBakedEntry entry) {
+            if (!batchesByInstance.TryGetValue(source, out var joined)) return;
+            // 新布局所需组必须已存在；页面集合变化仍走完整解除与注册。
+            for (int part = 0; part < entry.Submeshes.Length; part++) {
+                if (!batches.TryGetValue(new BatchKey(entry, part, source), out var batch) || !joined.Contains(batch)) {
+                    Remove(source); return;
+                }
+            }
+            foreach (var batch in joined) {
+                bool needed = false;
+                for (int part = 0; part < entry.Submeshes.Length; part++) {
+                    if (keysByBatch[batch].Equals(new BatchKey(entry, part, source))) { needed = true; break; }
+                }
+                if (!needed) { Remove(source); return; }
+            }
+            entriesByInstance[source].ReleaseRuntimeLayout(); entry.RetainRuntimeLayout();
+            entriesByInstance[source] = entry; sourceKeys[source] = new BatchKey(entry, 0, source);
+            preparedFrame = -1; batchInfoCache.Clear(); selectedDraws.Clear();
         }
 
         public void Remove(GpuSkeletonRenderer source) {
@@ -169,7 +207,8 @@ namespace GpuSpine.Core {
             batchInfoCache.Clear();
             selectedDraws.Clear();
             preparedFrame = -1;
-            joined[0].Entry.ReleaseRuntimeLayout();
+            entriesByInstance[source].ReleaseRuntimeLayout();
+            entriesByInstance.Remove(source); sourceKeys.Remove(source);
             batchesByInstance.Remove(source);
             foreach (var batch in joined) {
                 batch.Remove(source);
@@ -207,7 +246,8 @@ namespace GpuSpine.Core {
 		}
 
         public void Dispose() {
-            foreach (var joined in batchesByInstance.Values) joined[0].Entry.ReleaseRuntimeLayout();
+            foreach (var entry in entriesByInstance.Values) entry.ReleaseRuntimeLayout();
+            entriesByInstance.Clear(); sourceKeys.Clear();
             foreach (var batch in batches.Values) batch.Dispose();
 			foreach (var batch in idleBatches.Values) batch.Dispose();
 			BatchesDisposed += batches.Count + idleBatches.Count;
@@ -218,14 +258,14 @@ namespace GpuSpine.Core {
 			Material materialOverride = renderer.MaterialOverride;
 			Material source = pageMaterial != null ? pageMaterial : materialOverride;
 			if (source == null) {
-				Debug.LogError("GpuSkinningManager: cannot create a batch material, both the atlas page material and the material override are null.");
+				if (GpuSpineDiagnostics.EnableLogging) Debug.LogError("GpuSkinningManager: cannot create a batch material, both the atlas page material and the material override are null.");
 				return null;
 			}
 			bool useOverride = materialOverride != null && (pageMaterial == null || pageMaterial.shader == materialOverride.shader);
 			Shader shader = renderer.ResolveMaterialShader(pageMaterial);
 			if (shader == null || !shader.isSupported) return null;
 			Material clone = new Material(source);
-			clone.shader = shader;
+			if (clone.shader != shader) clone.shader = shader;
 			// A material override also contributes its shader keywords, so project-side shaders can
 			// ship a GPU-skinning variant keyword (e.g. SPINE_GPU_SKINNING) through the clone.
 			if (useOverride) {

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using GpuSpine.Baking;
 using GpuSpine.Core;
 using Unity.Profiling;
@@ -14,6 +14,7 @@ namespace GpuSpine {
         /// lifecycle, buffer uploads, indirect submission) from other subscribers of the event.</summary>
         static readonly ProfilerMarker CameraPrepareMarker = new ProfilerMarker("GpuSpine.CameraPrepare");
         readonly Dictionary<GpuSkeletonRenderer, GpuSpineBakedEntry> sources = new();
+        readonly Dictionary<Renderer, GpuSkeletonRenderer> byRenderer = new();
         readonly Dictionary<Camera, GpuSpineCameraFrame> cameras = new();
         readonly List<Camera> removedCameras = new();
         GpuSpineCameraFrame lastCamera;
@@ -37,28 +38,44 @@ namespace GpuSpine {
         void UnregisterEvents() { RenderPipelineManager.beginCameraRendering -= BeginCamera; }
 
         public static bool Register(GpuSkeletonRenderer renderer, GpuSpineBakedEntry entry) {
+            if (!IsValidEntry(renderer, entry)) return false;
+            GpuSkinningManager manager = EnsureInstance();
+            if (manager.sources.ContainsKey(renderer)) return true;
+            manager.sources.Add(renderer, entry);
+            BindRenderer(manager, renderer);
+            entry.RetainRuntimeLayout();
+            return true;
+        }
+
+        /// <summary>注册与布局切换共享资源有效性检查。</summary>
+        static bool IsValidEntry(GpuSkeletonRenderer renderer, GpuSpineBakedEntry entry) {
             if (entry == null || entry.Mesh == null || entry.Submeshes == null || entry.Submeshes.Length == 0) return false;
             foreach (var part in entry.Submeshes) {
                 Material page = part.PageMaterial;
                 Shader shader = renderer.ResolveMaterialShader(page);
                 if (page == null || shader == null || !shader.isSupported) return false;
             }
-            GpuSkinningManager manager = EnsureInstance();
-            if (manager.sources.ContainsKey(renderer)) return true;
-            manager.sources.Add(renderer, entry);
-            entry.RetainRuntimeLayout();
             return true;
         }
 
         public static void Unregister(GpuSkeletonRenderer renderer) {
             if (instance == null || !instance.sources.TryGetValue(renderer, out var entry)) return;
             instance.sources.Remove(renderer);
+            UnbindRenderer(instance, renderer);
             foreach (var frame in instance.cameras.Values) frame.Remove(renderer);
             entry.ReleaseRuntimeLayout();
         }
 
         public static bool ChangeEntry(GpuSkeletonRenderer renderer, GpuSpineBakedEntry entry) {
             EntryChanges++;
+            if (!IsValidEntry(renderer, entry)) return false;
+            if (instance != null && instance.sources.TryGetValue(renderer, out var previous) &&
+                ReferenceEquals(previous.ResourceOwner, entry.ResourceOwner) && ReferenceEquals(previous.Mesh, entry.Mesh)) {
+                previous.ReleaseRuntimeLayout(); entry.RetainRuntimeLayout();
+                instance.sources[renderer] = entry;
+                foreach (var frame in instance.cameras.Values) frame.ChangeLayout(renderer, entry);
+                return true;
+            }
             Unregister(renderer);
             return Register(renderer, entry);
         }
@@ -75,6 +92,17 @@ namespace GpuSpine {
                 GpuSpineBatch.SlicesCreated, GpuSpineBakedEntry.LayoutMeshesBuilt
             };
         }
+        /// <summary>返回值类型快照，供连续采样使用；旧数组 API 保持七项兼容。</summary>
+        public static GpuSpineLifecycleCounters GetLifecycleSnapshot() => new GpuSpineLifecycleCounters {
+            EntryChanges = EntryChanges,
+            BatchesCreated = GpuSpineCameraFrame.BatchesCreated,
+            BatchesDisposed = GpuSpineCameraFrame.BatchesDisposed,
+            BatchesParked = GpuSpineCameraFrame.BatchesParked,
+            BatchesReused = GpuSpineCameraFrame.BatchesReused,
+            SlicesCreated = GpuSpineBatch.SlicesCreated,
+            LayoutMeshesBuilt = GpuSpineBakedEntry.LayoutMeshesBuilt,
+            CapacityGrowths = GpuSpineBatch.CapacityGrowths
+        };
         static int EntryChanges;
 
         void BeginCamera(ScriptableRenderContext context, Camera camera) {
@@ -103,11 +131,28 @@ namespace GpuSpine {
 
         public static IReadOnlyList<GpuSpineBatchInfo> GetBatches() => instance?.lastCamera?.Draws ?? Empty;
 
+        /// <summary>Looks up the GPU skeleton that currently owns this MeshRenderer.</summary>
+        public static bool TryGetByRenderer(Renderer source, out GpuSkeletonRenderer gpu) {
+            gpu = null;
+            return instance != null && source != null && instance.byRenderer.TryGetValue(source, out gpu);
+        }
+
+        static void BindRenderer(GpuSkinningManager manager, GpuSkeletonRenderer renderer) {
+            MeshRenderer source = renderer.SourceRenderer;
+            if (source != null) manager.byRenderer[source] = renderer;
+        }
+
+        static void UnbindRenderer(GpuSkinningManager manager, GpuSkeletonRenderer renderer) {
+            MeshRenderer source = renderer.SourceRenderer;
+            if (source != null && manager.byRenderer.TryGetValue(source, out GpuSkeletonRenderer mapped) && mapped == renderer)
+                manager.byRenderer.Remove(source);
+        }
+
         void OnDestroy() {
             UnregisterEvents();
             foreach (var frame in cameras.Values) frame.Dispose();
             foreach (var entry in sources.Values) entry.ReleaseRuntimeLayout();
-            cameras.Clear(); sources.Clear();
+            cameras.Clear(); sources.Clear(); byRenderer.Clear();
             GpuSpineBakedRuntime.ClearRuntimeLayouts();
             if (instance == this) instance = null;
         }

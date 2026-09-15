@@ -1,9 +1,10 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using GpuSpine.Baking;
 using GpuSpine.Core;
 using Spine;
 using Spine.Unity;
 using UnityEngine;
+using UnityEngine.Rendering.Universal;
 
 namespace GpuSpine {
 	/// <summary>
@@ -38,8 +39,36 @@ namespace GpuSpine {
 
 		/// <summary>Legacy serialized compatibility only; draw order is now replayed exactly.</summary>
 		[HideInInspector] public bool AllowDrawOrderTimeline;
-		/// <summary>Legacy serialized compatibility only; clipping is now always evaluated.</summary>
+		/// <summary>When true, this instance skips GPU fragment clipping (its clip ranges upload as
+		/// zeros, so <c>GpuSpineClip</c> keeps every fragment). Serialized on shipped prefabs; kept
+		/// functional as the per-instance bypass for rigs whose clipping is not GPU-validated.</summary>
 		[HideInInspector] public bool IgnoreClipping;
+
+		/// <summary>When true, this instance is included in <see cref="GpuSpineRuntimeSwitch"/> so host
+		/// commands can toggle CPU/GPU without a project-side adapter. Off by default so examples stay out.</summary>
+		[Tooltip("Include this instance in GpuSpineRuntimeSwitch (host CPU/GPU toggle). Leave off for examples.")]
+		public bool IncludeInRuntimeSwitch;
+
+		/// <summary>Honor URP Camera Rendering Layer Filter when deciding per-camera submission.
+		/// Cameras that do not enable the filter are unaffected.</summary>
+		[Tooltip("Honor URP Camera Rendering Layer Filter. Cameras without the filter are unaffected.")]
+		public bool ApplyCameraRenderingLayerFilter = true;
+
+		/// <summary>Copy MeshRenderer MaterialPropertyBlock values into instance Custom0/Custom1.</summary>
+		[Tooltip("Copy MeshRenderer MaterialPropertyBlock vectors into instance Custom0/Custom1.")]
+		public bool CopyPropertyBlockToCustomData;
+
+		/// <summary>Vector property copied into Custom0.xyz (and .w unless Custom0WProperty is set).</summary>
+		[Tooltip("Vector property copied into Custom0.xyz (and .w unless Custom0WProperty is set).")]
+		public string Custom0Property;
+
+		/// <summary>Optional float property packed into Custom0.w.</summary>
+		[Tooltip("Optional float property packed into Custom0.w.")]
+		public string Custom0WProperty;
+
+		/// <summary>Vector property copied into Custom1.</summary>
+		[Tooltip("Vector property copied into Custom1.")]
+		public string Custom1Property;
 
 		/// <summary>Per-frame callback to fill the Custom0/Custom1 slots of this instance's draw data.</summary>
 		public event GpuSpineInstanceDataWriter WriteInstanceData;
@@ -77,6 +106,13 @@ namespace GpuSpine {
 		bool eventsRegistered;
 		int boundsFrame = -1;
 		Bounds cachedBounds;
+		MaterialPropertyBlock propertyBlock;
+		int custom0Id;
+		int custom0WId;
+		int custom1Id;
+		string cachedCustom0Property;
+		string cachedCustom0WProperty;
+		string cachedCustom1Property;
 
 		/// <summary>True while this skeleton is submitted through the GPU instanced path.</summary>
 		public bool IsGpuActive { get { return gpuActive; } }
@@ -97,6 +133,8 @@ namespace GpuSpine {
 
 		void OnEnable () {
 			activationPending = Application.isPlaying;
+			if (Application.isPlaying && IncludeInRuntimeSwitch)
+				GpuSpineRuntimeSwitch.Register(this);
 		}
 
 		void TryActivate () {
@@ -111,7 +149,7 @@ namespace GpuSpine {
 				if (meshRenderer == null) meshRenderer = GetComponentInChildren<MeshRenderer>();
 			}
 			if (skeletonAnimation == null || meshRenderer == null) {
-				Debug.Log("GpuSkeletonRenderer stays on the CPU path: it requires a SkeletonAnimation and a MeshRenderer on the same GameObject or a child.", this);
+				if (GpuSpineDiagnostics.EnableLogging) Debug.Log("GpuSkeletonRenderer stays on the CPU path: it requires a SkeletonAnimation and a MeshRenderer on the same GameObject or a child.", this);
 				return;
 			}
 
@@ -121,7 +159,7 @@ namespace GpuSpine {
 				rejectedKey = GpuSpineBakedRuntime.ComputeRuntimeHash(skeletonAnimation.Skeleton);
 			SkeletonDataAsset asset = skeletonAnimation.skeletonDataAsset;
 			if (asset == null) {
-				Debug.Log("GpuSkeletonRenderer stays on the CPU path: no SkeletonDataAsset assigned.", this);
+				if (GpuSpineDiagnostics.EnableLogging) Debug.Log("GpuSkeletonRenderer stays on the CPU path: no SkeletonDataAsset assigned.", this);
 				return;
 			}
 
@@ -129,36 +167,36 @@ namespace GpuSpine {
 			GpuSpineBakedData bakedData = BakedData;
 			if (bakedData == null) GpuSpineBakedRuntime.TryGet(asset, out bakedData);
 			if (bakedData == null) {
-				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: no GpuSpineBakedData available for the SkeletonDataAsset (assign BakedData or register one via GpuSpineBakedRuntime).", this);
+				if (GpuSpineDiagnostics.EnableLogging) Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: no GpuSpineBakedData available for the SkeletonDataAsset (assign BakedData or register one via GpuSpineBakedRuntime).", this);
 				return;
 			}
 
 			if (!bakedData.IsCompatible || bakedData.SourceAsset != asset) {
-				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: incompatible baked format or source asset. Rebake the skeleton.", this);
+				if (GpuSpineDiagnostics.EnableLogging) Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: incompatible baked format or source asset. Rebake the skeleton.", this);
 				return;
 			}
 			lastAudit = bakedData.Audit;
 			if (lastAudit == null || !lastAudit.Passed) {
-				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path, audit failed. First reason: "
+				if (GpuSpineDiagnostics.EnableLogging) Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path, audit failed. First reason: "
 					+ (lastAudit != null && lastAudit.Failures.Count > 0 ? lastAudit.Failures[0] : "unknown"), this);
 				return;
 			}
 			if (skeletonAnimation.zSpacing != bakedData.BakedZSpacing) {
-				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: zSpacing " + skeletonAnimation.zSpacing
+				if (GpuSpineDiagnostics.EnableLogging) Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: zSpacing " + skeletonAnimation.zSpacing
 					+ " differs from the baked zSpacing " + bakedData.BakedZSpacing + " (baking is fixed to 0 in v1).", this);
 				return;
 			}
 
 			Skeleton skeleton = skeletonAnimation.Skeleton;
 			if (skeleton == null) {
-				Debug.Log("GpuSkeletonRenderer stays on the CPU path: the skeleton is not initialized.", this);
+				if (GpuSpineDiagnostics.EnableLogging) Debug.Log("GpuSkeletonRenderer stays on the CPU path: the skeleton is not initialized.", this);
 				return;
 			}
 			string key = GpuSpineBakedRuntime.ComputeRuntimeKey(skeleton);
-			lastOrderKey = GpuSpineDrawOrderKey.ComputeHash(skeleton);
+			lastOrderKey = ComputeOrderHash(skeleton);
 			GpuSpineBakedEntry entry = ResolveEntry(bakedData.FindEntry(key), lastOrderKey.ToString("X16"));
 			if (entry == null || entry.Mesh == null) {
-				Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: no baked entry for the current skin combination (key "
+				if (GpuSpineDiagnostics.EnableLogging) Debug.LogWarning("GpuSkeletonRenderer stays on the CPU path: no baked entry for the current skin combination (key "
 					+ key + "). Rebake the SkeletonDataAsset or declare the combination on its GpuSpineBakedData.", this);
 				return;
 			}
@@ -169,7 +207,7 @@ namespace GpuSpine {
 			if (visibilityAssigned) meshRenderer.enabled = visible;
 			boneMatrices = new GpuBoneMatrix[entry.BoneCount];
 			currentBakedData = bakedData;
-			lastKey = GpuSpineBakedRuntime.ComputeRuntimeHash(skeleton);
+			lastKey = ComputeSkinHash(skeleton);
 			currentEntry = entry;
 			BuildClipping(entry, skeleton);
 
@@ -200,6 +238,10 @@ namespace GpuSpine {
 			RestoreCpuPath(null);
 		}
 
+		void OnDestroy () {
+			GpuSpineRuntimeSwitch.Unregister(this);
+		}
+
 		void LateUpdate () {
 			if (activationPending) {
 				activationPending = false;
@@ -214,6 +256,15 @@ namespace GpuSpine {
 				skeletonAnimation.UpdateMode = UpdateMode.EverythingExceptMesh;
 		}
 
+        ulong ComputeSkinHash(Skeleton skeleton) {
+            using var scope=GpuSpineCpuDiagnostics.Skin.Auto();
+            GpuSpineCpuDiagnostics.SkinChecks++;GpuSpineCpuDiagnostics.SkinHashRecomputations++;
+            return GpuSpineBakedRuntime.ComputeRuntimeHash(skeleton);
+        }
+        ulong ComputeOrderHash(Skeleton skeleton) {
+            using var scope=GpuSpineCpuDiagnostics.Order.Auto();
+            return GpuSpineDrawOrderKey.ComputeHash(skeleton);
+        }
 		void OnSkeletonUpdateComplete (ISkeletonAnimation animated) {
 			boundsFrame = -1;
 			// Fired after the bone world transforms are final (including constraints and UpdateLocal
@@ -221,11 +272,11 @@ namespace GpuSpine {
 			Skeleton skeleton = skeletonAnimation.Skeleton;
 			if (skeleton == null) return;
 			if (!gpuActive) {
-				if (GpuSpineBakedRuntime.ComputeRuntimeHash(skeleton) != rejectedKey) TryActivate();
+				if (ComputeSkinHash(skeleton) != rejectedKey) TryActivate();
 				return;
 			}
-			ulong key = GpuSpineBakedRuntime.ComputeRuntimeHash(skeleton);
-			ulong orderKey = GpuSpineDrawOrderKey.ComputeHash(skeleton);
+			ulong key = ComputeSkinHash(skeleton);
+			ulong orderKey = ComputeOrderHash(skeleton);
 			if (key != lastKey || orderKey != lastOrderKey) {
 				GpuSpineBakedEntry entry = ResolveEntry(currentBakedData.FindEntry(key.ToString("X16")), orderKey.ToString("X16"));
 				if (entry == null || entry.Mesh == null) {
@@ -253,7 +304,7 @@ namespace GpuSpine {
 			RefreshDynamicSlots(skeleton);
 			FillDeform(skeleton);
 			FillSlotColors(skeleton);
-			if (clipping != null) { clipping.Update(skeleton); clippingVersion++; }
+			if (clipping != null) { using var clipScope=GpuSpineCpuDiagnostics.Clip.Auto(); clipping.Update(skeleton); clippingVersion++; }
 		}
 
 		GpuSpineBakedEntry ResolveEntry (GpuSpineBakedEntry entry, string orderKey) {
@@ -264,13 +315,14 @@ namespace GpuSpine {
 		}
 
 		void BuildClipping (GpuSpineBakedEntry entry, Skeleton skeleton) {
-			clipping = entry.ClipVertexCapacity > 0
+			clipping = entry.ClipVertexCapacity > 0 && !IgnoreClipping
 				? new GpuSpineClippingState(entry.ClipVertexCapacity, entry.SlotCount) : null;
 			if (clipping != null) clipping.Update(skeleton);
 			clippingVersion++;
 		}
 
 		void ExportBoneMatrices (Skeleton skeleton) {
+            using var cpuScope=GpuSpineCpuDiagnostics.Bones.Auto();
 			if (boneMatrices == null) return;
 			ExposedList<Bone> bones = skeleton.Bones;
 			Bone[] items = bones.Items;
@@ -367,8 +419,10 @@ namespace GpuSpine {
 		/// (unweighted: local positions; weighted: all zeros = undeformed), or all zeros when the
 		/// attachment name is not a baked deform attachment.</summary>
 		void FillDeform (Skeleton skeleton) {
+            using var cpuScope=GpuSpineCpuDiagnostics.Deform.Auto();
 			if (deformSegment == null || deformSlots == null) return;
 			ExposedList<Slot> slots = skeleton.Slots;
+			bool changed = false;
 			for (int i = 0; i < deformSlots.Length; i++) {
 				DeformSlotState state = deformSlots[i];
 				int prefix = state.Prefix;
@@ -389,19 +443,15 @@ namespace GpuSpine {
 							defaults = info.DefaultValues;
 					}
 				}
-				if (source != null) {
-					int pairs = sourcePairs < capacity ? sourcePairs : capacity;
-					for (int p = 0; p < pairs; p++) deformSegment[prefix + p] = new Vector2(source[p * 2], source[p * 2 + 1]);
-					for (int p = pairs; p < capacity; p++) deformSegment[prefix + p] = Vector2.zero;
-				} else if (defaults != null) {
-					int pairs = defaults.Length < capacity ? defaults.Length : capacity;
-					for (int p = 0; p < pairs; p++) deformSegment[prefix + p] = defaults[p];
-					for (int p = pairs; p < capacity; p++) deformSegment[prefix + p] = Vector2.zero;
-				} else {
-					for (int p = 0; p < capacity; p++) deformSegment[prefix + p] = Vector2.zero;
-				}
-				deformVersion++;
-			}
+                int pairs = source != null ? System.Math.Min(sourcePairs, capacity) : defaults != null ? System.Math.Min(defaults.Length, capacity) : 0;
+                for (int p = 0; p < capacity; p++) {
+                    Vector2 value = p >= pairs ? Vector2.zero : source != null ? new Vector2(source[p * 2], source[p * 2 + 1]) : defaults[p];
+                    int index = prefix + p;
+                    changed = changed || !deformSegment[index].x.Equals(value.x) || !deformSegment[index].y.Equals(value.y);
+                    deformSegment[index] = value;
+                }
+            }
+			if (changed) deformVersion++;
 		}
 
 		/// <summary>Resolves every dynamic slot's selected variant from the live skeleton state
@@ -411,6 +461,7 @@ namespace GpuSpine {
 		/// variant. Runs every UpdateComplete after the bone matrix export; the dirty flag gates the
 		/// GPU upload.</summary>
 		void RefreshDynamicSlots (Skeleton skeleton) {
+            using var cpuScope=GpuSpineCpuDiagnostics.Dynamic.Auto();
 			if (dynamicSlotSelection == null || lastAudit == null) return;
 			List<GpuSpineDynamicSlotInfo> dynamicSlots = lastAudit.DynamicSlots;
 			ExposedList<Slot> slots = skeleton.Slots;
@@ -440,9 +491,10 @@ namespace GpuSpine {
 		/// the attachment is live on the slot but was never baked as a variant (e.g. the baked data is
 		/// stale), so the slot folds to hidden on the GPU path.</summary>
 		void WarnMissingVariantOnce (GpuSpineDynamicSlotInfo slotInfo, string attachmentName) {
+			if (!GpuSpineDiagnostics.EnableLogging) return;
 			string key = slotInfo.SlotName + "/" + attachmentName;
 			if (warnedMissingVariants == null || warnedMissingVariants.Add(key))
-				Debug.LogWarning("GpuSkeletonRenderer: attachment '" + attachmentName + "' of dynamic slot '" + slotInfo.SlotName
+				if (GpuSpineDiagnostics.EnableLogging) Debug.LogWarning("GpuSkeletonRenderer: attachment '" + attachmentName + "' of dynamic slot '" + slotInfo.SlotName
 					+ "' is not a baked variant; folding all variants of the slot. Rebake the SkeletonDataAsset.", this);
 		}
 
@@ -461,21 +513,25 @@ namespace GpuSpine {
 		/// AnimationState, so timeline-driven colors arrive here for free. Slots beyond the live
 		/// skeleton's count stay at white.</summary>
 		void FillSlotColors (Skeleton skeleton) {
+            using var cpuScope=GpuSpineCpuDiagnostics.Colors.Auto();
 			if (slotColors == null) return;
 			ExposedList<Slot> slots = skeleton.Slots;
 			int count = slotColors.Length < slots.Count ? slotColors.Length : slots.Count;
-			for (int i = 0; i < count; i++) {
-				Slot slot = slots.Items[i];
-				slotColors[i] = new Vector4(slot.R, slot.G, slot.B, slot.A);
-			}
-			for (int i = count; i < slotColors.Length; i++) slotColors[i] = Vector4.one;
-			slotColorsVersion++;
+			bool changed = false;
+            for (int i = 0; i < slotColors.Length; i++) {
+                Slot slot = i < count ? slots.Items[i] : null;
+                Vector4 value = slot != null ? new Vector4(slot.R, slot.G, slot.B, slot.A) : Vector4.one;
+                Vector4 previous = slotColors[i];
+                changed = changed || !previous.x.Equals(value.x) || !previous.y.Equals(value.y) || !previous.z.Equals(value.z) || !previous.w.Equals(value.w);
+                slotColors[i] = value;
+            }
+			if (changed) slotColorsVersion++;
 		}
 
 		/// <summary>Full restore of the original CPU path: original updateMode, original MeshRenderer
 		/// suppression state, batches left, references released.</summary>
 		void RestoreCpuPath (string reason) {
-			if (reason != null) Debug.LogWarning(reason, this);
+			if (GpuSpineDiagnostics.EnableLogging && reason != null) Debug.LogWarning(reason, this);
 			gpuActive = false;
 			if (skeletonAnimation != null) {
 				skeletonAnimation.UpdateMode = originalUpdateMode;
@@ -528,12 +584,22 @@ namespace GpuSpine {
 		public MeshRenderer SourceRenderer => meshRenderer;
 		public Transform SkeletonTransform => skeletonAnimation != null ? skeletonAnimation.transform : transform;
 		internal bool ShouldSubmitTo(Camera camera) => ShouldSubmit && camera != null &&
-			(camera.cullingMask & (1 << SourceRenderer.gameObject.layer)) != 0 && (CameraFilter == null || CameraFilter(camera));
+			(camera.cullingMask & (1 << SourceRenderer.gameObject.layer)) != 0 &&
+			PassesRenderingLayerFilter(camera) &&
+			(CameraFilter == null || CameraFilter(camera));
 
-		/// <summary>Instance index (SV_InstanceID) of this renderer within its batches' submission
-		/// arrays this frame, written by GpuSpineBatch while filling instance data. -1 while not
-		/// submitted. All batches of one entry share the same submission order, so a single index
-		/// addresses every batch of the renderer (used by per-instance mask resubmission).</summary>
+		bool PassesRenderingLayerFilter(Camera camera) {
+			if (!ApplyCameraRenderingLayerFilter || SourceRenderer == null) return true;
+			if (!camera.TryGetComponent(out UniversalAdditionalCameraData data) ||
+				!data.enableCameraRenderingLayerFilter)
+				return true;
+			if (camera.cameraType == CameraType.SceneView && !data.applyRenderingLayerFilterInSceneView)
+				return true;
+			return (data.cameraRenderingLayerMask & SourceRenderer.renderingLayerMask) != 0;
+		}
+
+        /// <summary>最近一次上传组的调试索引；多相机/多材质重绘请使用 GetBatches(camera, source)，
+        /// 不把此值作为所有上传组的通用实例索引。</summary>
 		public int BatchInstanceIndex { get; internal set; } = -1;
 
 		/// <summary>Version observed independently by every upload target.</summary>
@@ -556,7 +622,8 @@ namespace GpuSpine {
 
 		Bounds CalculateWorldBounds {
 			get {
-				float radius = 0f, deformMargin = 0f;
+				using var boundsScope=GpuSpineCpuDiagnostics.Bounds.Auto();
+                float radius = 0f, deformMargin = 0f;
 				if (deformSegment != null) {
 					foreach (Vector2 value in deformSegment)
 						deformMargin = Mathf.Max(deformMargin, Mathf.Max(Mathf.Abs(value.x), Mathf.Abs(value.y)));
@@ -600,6 +667,7 @@ namespace GpuSpine {
 		/// <summary>Fills one instance data record: transform, skeleton color, then the user callback
 		/// for the Custom0/Custom1 extension slots.</summary>
 		internal void FillInstanceData (ref GpuSpineInstanceData data) {
+            using var instanceScope=GpuSpineCpuDiagnostics.InstanceData.Auto();
 			Matrix4x4 matrix = skeletonAnimation.transform.localToWorldMatrix;
 			data.LocalToWorldRow0 = matrix.GetRow(0);
 			data.LocalToWorldRow1 = matrix.GetRow(1);
@@ -608,8 +676,35 @@ namespace GpuSpine {
 			data.Color = skeleton != null ? new Vector4(skeleton.R, skeleton.G, skeleton.B, skeleton.A) : Vector4.one;
 			data.Custom0 = Vector4.zero;
 			data.Custom1 = Vector4.zero;
+			CopyPropertyBlockCustom(ref data);
 			GpuSpineInstanceDataWriter writer = WriteInstanceData;
 			if (writer != null) writer(this, ref data);
+		}
+
+		void CopyPropertyBlockCustom(ref GpuSpineInstanceData data) {
+			if (!CopyPropertyBlockToCustomData || meshRenderer == null) return;
+			CacheCustomPropertyIds();
+			if (propertyBlock == null) propertyBlock = new MaterialPropertyBlock();
+			meshRenderer.GetPropertyBlock(propertyBlock);
+			if (custom0Id != 0) {
+				Vector4 value = propertyBlock.GetVector(custom0Id);
+				if (custom0WId != 0) value.w = propertyBlock.GetFloat(custom0WId);
+				data.Custom0 = value;
+			}
+			if (custom1Id != 0) data.Custom1 = propertyBlock.GetVector(custom1Id);
+		}
+
+		void CacheCustomPropertyIds() {
+			if (cachedCustom0Property == Custom0Property &&
+				cachedCustom0WProperty == Custom0WProperty &&
+				cachedCustom1Property == Custom1Property)
+				return;
+			cachedCustom0Property = Custom0Property;
+			cachedCustom0WProperty = Custom0WProperty;
+			cachedCustom1Property = Custom1Property;
+			custom0Id = string.IsNullOrEmpty(Custom0Property) ? 0 : Shader.PropertyToID(Custom0Property);
+			custom0WId = string.IsNullOrEmpty(Custom0WProperty) ? 0 : Shader.PropertyToID(Custom0WProperty);
+			custom1Id = string.IsNullOrEmpty(Custom1Property) ? 0 : Shader.PropertyToID(Custom1Property);
 		}
 	}
 }

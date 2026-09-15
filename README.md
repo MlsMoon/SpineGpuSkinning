@@ -4,7 +4,7 @@ English | [简体中文](Docs/README.zh-Hans.md) | [日本語](Docs/README.ja.md
 
 GPU skinning for [spine-unity](http://esotericsoftware.com/spine-unity) SkeletonAnimation — moves the per-frame CPU skinning / mesh rebuild / vertex upload path to the GPU vertex shader, without modifying any Spine source code.
 
-> CPU keeps bone evaluation (AnimationState, mixing, events, physics, BoneFollower, runtime skinning). The GPU takes over vertex skinning, mesh assembly and vertex upload. Instances sharing an atlas page are drawn in one `DrawMeshInstancedIndirect` batch.
+> CPU keeps bone evaluation (AnimationState, mixing, events, physics, BoneFollower, runtime skinning). The GPU takes over vertex skinning, mesh assembly and vertex upload. Compatible instances share upload resources; draw ranges retain per-character transparent ordering.
 
 ## Requirements
 
@@ -131,6 +131,39 @@ Include `Runtime/Shaders/SpineGpuSkinning.hlsl` and call one function at the top
 
 Enumerate live batches via the batch source API and re-submit them into your own render targets (mask RTs etc.). See `Skills~/gpuspine-use-plugin/references/integration-examples.md`.
 
+## 诊断日志与自动验证总开关
+
+统一入口：[GpuSpineDiagnostics.cs](Runtime/GpuSpineDiagnostics.cs)。两个编译期常量默认均为 `false`：
+
+```csharp
+public const bool EnableLogging = false;
+public const bool EnableAutomaticValidation = false;
+```
+
+- `EnableLogging` 控制已接入的运行时日志和自动烘焙诊断文字；关闭日志不会停止验证流程。
+  显式菜单报告与烘焙异常并非全部由该开关过滤。
+- `EnableAutomaticValidation` 是宿主自动冒烟、截图、性能采集和 CPU/GPU 对照的总门禁。
+  宿主必须主动检查它；定义常量本身不会自动拦截任意外部脚本。
+- 在自动 Bootstrap 的第一步检查总开关，早于读取 EditorPrefs、命令行参数和创建 GameObject。
+  已挂载的验证组件也应在 Start 禁用自身；Update/LateUpdate 不得继续改帧率或渲染状态。
+- 关闭时正常 GPU 蒙皮、运行时注册和编辑器资源烘焙仍工作；不要给这些生产入口加验证门禁。
+- 需要验证时显式把自动验证开关改为 `true` 并等待 Unity 重编译；验证完成后恢复 `false`。
+  EditorPrefs、验证宏和命令行选项只能作为总门禁之后的二级条件，不能绕过它。
+- 性能基准中不要运行自动截图：同步 ReadPixels、PNG 编码和 CPU/GPU 切换会制造额外卡顿。
+
+宿主接入示例（验证驱动不随插件分发）：
+
+```csharp
+static void Bootstrap() {
+    if (!GpuSpineDiagnostics.EnableAutomaticValidation) return;
+    // 仅在此后启动宿主验证。
+}
+void Start() {
+    if (!GpuSpineDiagnostics.EnableAutomaticValidation) { enabled = false; return; }
+    // 仅在此后注册采集事件、创建截图目标或启动协程。
+}
+```
+
 ## Agent skills
 
 This repository ships two agent skills under `Skills~/`:
@@ -143,3 +176,17 @@ Copy the skill folder(s) into your project's agent skill directory (e.g. `.agent
 ## License
 
 MIT (see `LICENSE`). Spine runtimes remain under the Spine Runtimes License and are not part of this repository.
+
+## 布局资源共享与冷切换
+
+- 每个相机独立管理资源组，键包含骨架 ResourceOwner、实际 Mesh、图集页材质、覆盖材质及渲染状态。
+  同一骨架的不同绘制顺序视图共用骨骼/实例缓冲，布局切换只更新索引范围。
+- 兼容布局保留成员；页面集合、Mesh 或状态不兼容时仍按完整注册路径处理。
+- 多段角色始终按角色顺序逐段绘制；仅单段、几何范围一致、实例连续时合并绘制。
+- args 在同帧按几何与实例范围独立分配槽位，跨帧按绘制峰值复用；不按历史布局无限累积。
+  同帧不得改写已有槽位，否则正常绘制和单角色描边会互相覆盖。
+- 材质按资源组内实例偏移共享，扩容后重绑全部偏移材质；不再为每个布局段复制材质。
+- `GetBatches(camera, source)` 返回可直接重绘的范围；`SubmeshIndex=0` 提供三角形拓扑，
+  实际范围由 args 的 IndexStart/IndexCount 决定，调用者必须保留返回的材质与 args 配对。
+- 初次加载新的骨架、图集或相机仍需要资源初始化。此优化消除布局冷切换的重复创建，
+  不承诺全游戏零分配、零 GC，也不把 Editor 的材质回调成本等同于 Player 成本。
