@@ -1,4 +1,4 @@
 interface:
   display_name: "GpuSpine: Develop the Plugin"
-  short_description: "Maintain and extend the SpineGpuSkinning GPU skinning plugin."
-  default_prompt: "Please use $gpuspine-develop-plugin to complete the task."
+  short_description: "Edit SpineGpuSkinning Runtime/Editor: bake layouts, buffers, clipping, verification."
+  default_prompt: "Read AGENTS.md and $gpuspine-develop-plugin before editing plugin source. Verify signatures in this repo; do not reuse older DrawMeshInstancedIndirect-only or CPU-fallback-for-clipping assumptions."

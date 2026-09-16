@@ -2,9 +2,11 @@
 
 [English](../README.md) | 简体中文 | [日本語](README.ja.md)
 
-为 [spine-unity](http://esotericsoftware.com/spine-unity) 的 SkeletonAnimation 提供 GPU 蒙皮：把每帧 CPU 蒙皮 / 网格重建 / 顶点上传改到 GPU 顶点着色器，且不修改任何 Spine 源码。
+为 [spine-unity](http://esotericsoftware.com/spine-unity) 的 `SkeletonAnimation` 提供 GPU 蒙皮：把每帧 CPU 网格重建 / 顶点上传改到 GPU 顶点着色器，且不修改任何 Spine 源码。
 
 > CPU 继续做骨骼求解（AnimationState、混合、事件、物理、BoneFollower、运行时换肤）。GPU 负责顶点蒙皮、网格组装和上传。兼容实例共享上传资源，绘制范围仍保留逐角色透明排序。
+
+**给 Agent：** 先读仓库根目录 [`AGENTS.md`](../AGENTS.md)。技能在 [`Skills~/`](../Skills~/README.md)（Unity 会忽略 `~` 目录）。机器可读索引：[`llms.txt`](../llms.txt)。不要按旧 README 猜测 API，以 `AGENTS.md` 的当前合同为准。
 
 ## 环境要求
 
@@ -18,135 +20,86 @@
 2. 选中带 `SkeletonAnimation` 的物体。
 3. Add Component → `Gpu Skeleton Renderer`。
 
-导入时编辑器会自动审计并烘焙每个 `SkeletonDataAsset`；容器（审计报告 + 每种皮肤组合一份原型网格）作为该资产的子资源。组件会：
+导入时编辑器会自动审计并烘焙每个 `SkeletonDataAsset`；容器（审计报告 + 每种皮肤组合一份原型网格 + 绘制顺序布局）作为该资产的子资源。组件会：
 
-- 按当前皮肤组合查找已烘焙入口（运行时从不烘焙；找不到则警告并留在 CPU 路径）；
-- 有入口则切到 GPU：`updateMode = EverythingExceptMesh`，并关闭 `MeshRenderer`；
-- 每帧在 `UpdateComplete` 后导出 3x2 骨骼调色板；
-- 按图集页合批提交。
+- 按当前皮肤组合和绘制顺序布局查找已烘焙入口（运行时从不烘焙；找不到则留在 CPU 路径）；
+- 有入口则切到 GPU：`updateMode = EverythingExceptMesh`，并抑制 `MeshRenderer` 自动绘制；
+- 每帧在 `UpdateComplete` 后导出 3x2 骨骼调色板、Deform、槽颜色和裁切范围；
+- 按相机用 `Graphics.RenderMeshIndirect` 合批提交。
 
-去掉或禁用组件即回到原 CPU 路径，无残留。
-
-审计失败时实例**静默留在 CPU 路径**，无需处理。
+去掉或禁用组件即回到原 CPU 路径，无残留。审计失败时实例**留在 CPU 路径**，无需处理。
 
 ## 示例
 
-`Example/` 内含原创冒险家 **SampleDude** 和小机器人 **SampleRobot**，各有 3 套 Spine 皮肤。
-打开 `Example/GpuSpineComparison.unity` 后进入 Play Mode。
+`Example/` 含 **SampleDude**、**SampleRobot**、**ComplexCourier**、**UltraCourier**。打开 `Example/GpuSpineComparison.unity` 后进入 Play Mode。
 
 - 显示实时 **FPS**、平均帧时间与最近一次 CPU/GPU 采样值。
-- 同一批角色切换 CPU/GPU 蒙皮，保留位置和动画进度。
-- 默认 32 人，UI 可调整 0–1000 人，并选择混合皮肤或指定配色。
-- 提供 SVG 源稿、Spine 4.2 导出、Prefab 与 GPU 烘焙数据。
-- 只需 Unity、URP 和 spine-unity，不依赖躺瓶业务框架。
+- 同一批角色切换 CPU/GPU，保留位置和动画进度。
+- 默认 32 人，UI 可调 0–1000；**Production 300** 是一键压力档。
+- 只需 Unity、URP 和 spine-unity，不依赖宿主游戏框架。
 
 通过 **Tools / GPUSpineSkin / Build Comparison Example** 重建。详见 `Example/README.md`。
 
+示例用 `GpuSkeletonRenderer.CameraFilter` 只向 Game Camera 提交，避免 SceneView / 预览相机承担批次准备成本。插件本身仍支持多相机。
+
 ## 适用 Case 与性能边界
 
-**GPU 蒙皮不保证比 CPU 快。少量、低顶点角色使用 CPU 可能更省。**
-两种模式的动画状态、骨骼与约束求解仍在 CPU 上；GPU 模式另外需要上传骨骼、Deform、槽颜色，
-并维护可见性、排序、缓冲和绘制批次。必须让省掉的 CPU 网格计算与上传成本超过这些新增开销。
+**GPU 蒙皮不保证比 CPU 快。** 少量、低顶点角色用 CPU 可能更省。两种模式的动画与骨骼求解仍在 CPU 上。
 
-| Case | 建议 |
-| --- | --- |
-| 少量角色，主要是 Region 附件，网格很轻 | 优先 CPU；用简单示例核对效果与开销。 |
-| 大量可见角色，共享骨架、皮肤和图集材质 | 值得评估 GPU；检查实际合批和网格计算收益。 |
-| 高密度加权网格，披风、配饰等有 Deform | 更接近 GPU 的目标负载；但 Deform 求值和上传仍有成本。 |
-| 频繁换肤、附件/绘制顺序变化、多材质、透明交错遮挡 | 批次会被拆分，不能用角色数量推断 DrawCall。 |
-| 裁切、阴影、自定义多 Pass | 有额外开销与接入要求，先确认 CPU/GPU 画面一致。 |
-| 瓶颈在动画求解、AI、填充率或其他系统 | 仅切换蒙皮可能没有整体帧时间收益。 |
+示例负载：
 
-示例提供两类真实负载：
+- **Simple duo**：各 20 骨、16 槽、159 可见顶点、3 套皮肤。功能对照，不是提速证明。
+- **Complex courier**（默认）：48 骨、24 槽、每皮肤约 1170 烘焙顶点，含 Deform、24 点非凸裁切、附件 / 颜色 / DrawOrder 时间轴。
+- **Ultra courier**：100 骨、26 槽、约 2490 烘焙顶点。压力案例，不是生产角色建议。
 
-- **Simple duo**：小人＋机器人，各 20 根骨骼、16 个槽、159 个可见顶点、3 套皮肤。
-  用于基本功能和开销对照，不是提速证明。
-- **Complex courier**（默认）：48 根骨骼、24 个槽、每皮肤约 1170 个烘焙顶点；
-  披风、围巾、背带、发束采用多骨骼加权与 Deform；护目镜有 24 点非凸裁切；
-  行走循环同时包含附件切换、槽颜色、DrawOrder 和 3 套皮肤。
+比较时固定案例、数量、皮肤分布、分辨率和镜头。FPS 不能直接证明 CPU 占用降低。正式结论优先 Player。
 
-复杂案例覆盖生产角色常见的技术特征，但不等价于某个游戏的完整灯光、阴影、描边、相机和玩法负载。
-资产中有多少皮肤或动画不直接决定逐帧开销，应看当前实际执行的动画、网格、裁切与绘制工作。
+同机 Windows DX11 Player、1280×720、32 个 UltraCourier 的一次记录：GPU 约 84.5–92.7 FPS（10.79–11.83 ms），CPU 约 151.8 FPS（6.59 ms）。该数量尚未覆盖 GPU 准备与上传成本，不能外推到其他硬件。
 
-比较时固定 **案例、数量、皮肤分布、分辨率和镜头**，预热后重复观察 FPS 与帧时间，并用 Profiler
-核对 CPU 网格热点、渲染线程、GPU 时间、GC 和实际绘制批次。FPS 不能直接证明 CPU 占用降低。
-Editor Play Mode 可交互对照；正式性能结论应优先基于 Player，避免编辑器开销干扰。
-
-生产复现入口：Example 的 **Production 300 cats** 会使用高复杂案例并设置 300 个实例，专门放大 CPU Mesh 重建与顶点上传成本；它不是对真实猫的视觉替身，而是对骨骼、网格、Deform 和批次规模的可分发近似。
-
-## Windows Player 对照结果
-
-在相同 Player、1280×720、相同正交相机、相同 UltraCourier 案例和 32 个角色下，实测一次：
-
-- GPU：约 84.5–92.7 FPS，10.79–11.83 ms/frame。
-- CPU：约 151.8 FPS，6.59 ms/frame。
-
-这说明当前 32 个复杂实例还不足以覆盖 GPU 批次准备、骨骼/Deform 数据上传和间接绘制的额外成本。
-GPU 蒙皮已经省掉了 Spine CPU Mesh 重建，但总帧时间仍可能更高。该结果来自 Windows DX11 Player，
-不包含 Unity Editor 的 SceneView、Inspector 和编辑器循环影响；它只代表本机、本分辨率、本案例和本数量。
-
-测试方式：先等待场景稳定，再记录 GPU；点击同一位置切换 CPU，等待稳定后记录 CPU；不改变镜头、数量、
-皮肤和窗口大小。正式性能决策仍需在目标硬件上重复多组数量（例如 32、100、300、1000），并结合
-Profiler 的 CPU、Render Thread、GPU 时间、GC 与实际 DrawCall 判断。
 ## 编辑器菜单
 
-通用工具在 **`Tools/GPUSpineSkin`** 下，作用于选中的 `SkeletonDataAsset`：
+通用工具在 **`Tools/GPUSpineSkin`**。源指纹 **v2** 哈希依赖文件**内容**（加路径和长度），只改时间戳的 VCS checkout 不会重烘。网格被手删、或源文件没变也要重建时，用 Force Rebake。
 
-| 菜单 | 作用 |
-|---|---|
-| `Tools/GPUSpineSkin/Rebake Selected` | 指纹或入口键变化时重烘 |
-| `Tools/GPUSpineSkin/Force Rebake Selected` | 先清指纹再强制重烘 |
-| `Tools/GPUSpineSkin/Log Audit Report` | 只打审计日志，不烘焙 |
-| `Tools/GPUSpineSkin/Dump Baked Data` | 打印容器、入口和声明组合 |
-| `Tools/GPUSpineSkin/Inspect Default Shader` | 检查 `GpuSpine/URP/Skeleton` 编译状态 |
-| `Tools/GPUSpineSkin/Build Comparison Example` | 重建双角色导入物与人群对照场景 |
-
-选中 `SkeletonDataAsset` 时，Project 右键也有 `Assets/GpuSpine/` 下的 Rebake / Audit。宿主工程的临时冒烟请用 `Tools/GPUSpineSkin/Temp/...`。
+宿主临时冒烟请用 `Tools/GPUSpineSkin/Temp/...`。
 
 ## 自动回退 CPU 的规则
 
 | 检测到的特性 | 行为 |
 |---|---|
-| Deform 时间轴 | 支持：CPU 算出的 `slot.Deform` 每帧进 deform 缓冲，在骨骼加权前应用 |
-| 槽颜色时间轴 (RGBA / RGB / Alpha) | 支持：每槽 `slot.R/G/B/A` 每帧上传并乘进顶点色 |
+| Deform 时间轴 | 支持：CPU 的 `slot.Deform` 有变化才上传，在骨骼加权前应用 |
+| 槽颜色 (RGBA / RGB / Alpha) | 支持：每槽 `R/G/B/A` 上传并乘进顶点色 |
 | Dark color (RGBA2 / RGB2) | CPU 回退（未实现 tint black） |
 | Texture sequence | CPU 回退 |
-| 当前皮肤组合没有烘焙入口 | CPU 回退并警告 |
-| `zSpacing` 与烘焙值 0 不一致 | CPU 回退并警告 |
+| 没有烘焙入口 / `FormatVersion` 不兼容（当前为 5） | CPU 回退 |
+| `zSpacing` 与烘焙值 0 不一致 | CPU 回退 |
 | Attachment 时间轴 | 支持（动态槽）：变体预烘，未选中的在顶点着色器折叠 |
-| Draw order 时间轴 | 默认 CPU 回退；组件开启 `AllowDrawOrderTimeline` 才走 GPU |
-| Clipping | 默认 CPU 回退；开启 `IgnoreClipping` 才走 GPU（不裁切） |
-| 顶点超过 4 根骨骼影响 | 截断并重归一化，警告后仍走 GPU |
+| Draw order 时间轴 | 支持：烘焙 `DrawOrderLayouts` 回放实时顺序。没有布局的旧容器回退 CPU。`AllowDrawOrderTimeline` 是遗留字段，不再作为门禁 |
+| Clipping | 支持：GPU 片元裁切。`IgnoreClipping` 只跳过该实例的裁切（范围上传为零）。没有布局的旧容器回退 CPU |
+| 顶点超过 4 根骨骼影响 | 截断并重归一化，仍走 GPU |
+
+完整规则见 `Skills~/gpuspine-use-plugin/references/fallback-rules.md`。
 
 ## 自定义 Shader / RenderPass
 
-在顶点函数开头 include `Runtime/Shaders/SpineGpuSkinning.hlsl` 并调用蒙皮函数。完整例子见 `Skills~/gpuspine-use-plugin/references/integration-examples.md`。
+顶点函数开头 include `Runtime/Shaders/SpineGpuSkinning.hlsl` 并调用 8 参数的 `GpuSpineSkinToWorld`。需要裁切时在片元函数调用 `GpuSpineClip`。
 
-用批次 API 枚举存活批次，再提交到自己的 RT。同上文档。
+自定义 GPU shader 必须先挂在图集页材质上，再把使用**同一 shader** 的材质赋给 `MaterialOverride`。不同 shader 家族不会替换页材质 shader，会落到 `DefaultShader`（`GpuSpine/URP/Skeleton`）。
+
+用 `GpuSkinningManager.GetBatches(camera)` 或 `GetBatches(camera, source)` 枚举绘制。`SubmeshIndex` 为 0，真实范围在 args 的 IndexStart/IndexCount。完整例子见 `Skills~/gpuspine-use-plugin/references/integration-examples.md`。
+
+## 运行时切换与实例数据
+
+- `IncludeInRuntimeSwitch`（默认关）把实例登记进 `GpuSpineRuntimeSwitch`，供宿主切换 CPU/GPU。
+- `CopyPropertyBlockToCustomData` 在 `WriteInstanceData` 之前把 MeshRenderer MPB 抄到 Custom0/Custom1。
+
+## 诊断开关
+
+`Runtime/GpuSpineDiagnostics.cs` 两个编译期常量，默认都是 `false`。`EnableLogging` 只管已接入的日志；`EnableAutomaticValidation` 是宿主自动冒烟总门禁。正常 GPU 蒙皮不受验证门禁影响。
 
 ## Agent skills
 
-仓库在 `Skills~/` 提供：
-
-- `gpuspine-use-plugin` — 接入、回退、排错
-- `gpuspine-develop-plugin` — 架构、烘焙语义、缓冲布局
-
-拷到工程的 agent skill 目录（例如 `.agents/skills/`）即可。
+`Skills~/` 提供 `gpuspine-use-plugin`（接入）和 `gpuspine-develop-plugin`（改插件）。拷到宿主 `.agents/skills/` 或 `.cursor/skills/` 即可被多数 Agent 自动加载。本仓库请先读 `AGENTS.md`。
 
 ## 许可
 
 MIT（见 `LICENSE`）。Spine 运行时仍受 Spine Runtimes License 约束，不属于本仓库。
-
-## 布局资源共享与冷切换
-
-- 每个相机独立管理资源组，键包含骨架 ResourceOwner、实际 Mesh、图集页材质、覆盖材质及渲染状态。
-  同一骨架的不同绘制顺序视图共用骨骼/实例缓冲，布局切换只更新索引范围。
-- 兼容布局保留成员；页面集合、Mesh 或状态不兼容时仍按完整注册路径处理。
-- 多段角色始终按角色顺序逐段绘制；仅单段、几何范围一致、实例连续时合并绘制。
-- args 在同帧按几何与实例范围独立分配槽位，跨帧按绘制峰值复用；不按历史布局无限累积。
-  同帧不得改写已有槽位，否则正常绘制和单角色描边会互相覆盖。
-- 材质按资源组内实例偏移共享，扩容后重绑全部偏移材质；不再为每个布局段复制材质。
-- `GetBatches(camera, source)` 返回可直接重绘的范围；`SubmeshIndex=0` 提供三角形拓扑，
-  实际范围由 args 的 IndexStart/IndexCount 决定，调用者必须保留返回的材质与 args 配对。
-- 初次加载新的骨架、图集或相机仍需要资源初始化。此优化消除布局冷切换的重复创建，
-  不承诺全游戏零分配、零 GC，也不把 Editor 的材质回调成本等同于 Player 成本。

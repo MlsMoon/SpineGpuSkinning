@@ -74,8 +74,11 @@ paths (`spine-unity/Components/...`, `spine-csharp/...`).
 - The editor bakes with `zSpacing = 0` (v1 simplification, recorded as `BakedZSpacing`
   on the container). The baker still implements the formula — never hardcode 0 in the
   expansion code.
-- Runtime draw order changes invalidate the setup-order assumption — covered by the
-  audit's DrawOrderTimeline warning.
+- Runtime draw order is **replayed**, not ignored. `GpuSpineOrderBaker` stores one
+  index layout per unique `DrawOrderTimeline` permutation (plus setup order). The
+  component hashes the live order (`GpuSpineDrawOrderKey`) and `FindOrderedEntry`.
+  A stale container with no `DrawOrderLayouts` falls back to CPU when the audit has
+  draw-order or clipping. `AllowDrawOrderTimeline` is unused.
 
 ## 5. Triangle concatenation and submesh = batch boundary
 
@@ -86,10 +89,13 @@ paths (`spine-unity/Components/...`, `spine-csharp/...`).
   `((AtlasRegion)region).page.rendererObject` changes (reference compare), the current
   submesh closes. Each submesh records `PageMaterial`, `IndexStart`, `IndexCount` and
   `HasPmaAdditiveSlot`.
-- Each submesh is exactly one indirect draw batch at runtime; the page material
-  reference is the batch key ingredient (same page => same material => mergeable).
-- Static-zone submeshes come first; dynamic-zone runs (grouped by page material)
-  continue seamlessly after them (indices stay contiguous).
+- A layout's submesh list is the page-material run list for that order. At runtime
+  those runs become draw slices of a **shared** upload group (same ResourceOwner +
+  Mesh + page material). `SubmeshIndex` on the public batch view is 0; args carry
+  `IndexStart` / `IndexCount`.
+- Combined layout mesh: one `Instantiate` of the baked vertex streams, every layout's
+  indices concatenated, `subMeshCount = 1`. Layout views are `MemberwiseClone` with
+  rebased `IndexStart`.
 
 ## 6. Visibility culling at bake time
 
@@ -109,12 +115,11 @@ paths (`spine-unity/Components/...`, `spine-csharp/...`).
   `rgb = skeleton.RGB * slot.RGB * attachment.RGB * color.a`; **additive slots get
   `color.a = 0`**. Skeleton/slot colors are per-instance, per-frame dynamic quantities —
   baking them would kill tinting and fades.
-- The bake stores only the attachment's own color (`attachment.R/G/B/A`, default white),
-  with **alpha forced to 0 for additive slots** (the PMA additive trick; the default
-  shader's `Blend One OneMinusSrcAlpha` then degenerates to `One One`).
-- Skeleton color rides in the per-instance data (`GpuSpineInstanceData.Color`); the
-  shader recomposes the product. Slot color timelines are unsupported → audit hard
-  failure.
+- COLOR stores the attachment's **raw** alpha. Additive is `TEXCOORD6.z`, applied in
+  the shader (`GpuSpinePremultiplyColor`), not by baking alpha 0 into COLOR.
+- Skeleton color rides in `GpuSpineInstanceData.Color`. Slot colors ride
+  `_GpuSpineSlotColors` every frame, so RGBA/RGB/Alpha timelines work. Dark color
+  (RGBA2 / RGB2) remains a hard failure. See section 12.
 
 ## 8. Scale is already applied at load
 
@@ -212,3 +217,13 @@ dynamic slot table (`GpuSpineAuditor.CollectSlotAttachmentNames`) and the deform
 resolution (`GpuSpineBaker.FindAttachmentByName`) — must use the **Name**, never the
 placeholder key, or every variant/segment silently misses (the skeleton renders nothing
 when all dynamic variants fold).
+
+## 13. Clipping
+
+Clipping attachments emit no vertices (section 6). `GpuSpineOrderBaker` records
+`ClipVertexCapacity` from the largest clip polygon in the default + effective skins.
+At runtime `GpuSpineClippingState` tessellates live clip triangles unless
+`IgnoreClipping` is set. The fragment function calls `GpuSpineClip(positionSS,
+slotIndex, instanceID)`: `range.y == 0` keeps the fragment; otherwise the pixel must
+sit in at least one clip triangle. This is GPU clipping, not "render unclipped unless
+the user opts in."

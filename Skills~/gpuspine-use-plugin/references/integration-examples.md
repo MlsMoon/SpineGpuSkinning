@@ -19,18 +19,21 @@ Contract (from `Runtime/Shaders/SpineGpuSkinning.hlsl`):
   ```
 
 - The skinning buffers (`_GpuSpineBones`, `_GpuSpineInstances`, `_GpuSpineDynSlots`,
-  `_GpuSpineDeform`, `_GpuSpineSlotColors` and the count uniforms) are bound at **material
-  level** by the runtime (`Runtime/Core/GpuSpineBatch.cs`). Never declare or bind them
-  yourself; just include the hlsl file.
+  `_GpuSpineDeform`, `_GpuSpineSlotColors`, `_GpuSpineClipVertices`, `_GpuSpineClipRanges`
+  and the count uniforms) are bound at **material level** by the runtime
+  (`Runtime/Core/GpuSpineBatch.cs`). Never declare or bind them yourself; just include
+  the hlsl file. After a slice material clone, rebind `_GpuSpineInstanceFilter = -1`.
 - Compose the vertex color through `GpuSpineGetVertexColor(input.color, input.slotIndex,
   input.instanceID)` (attachment COLOR x slot color x instance skeleton color), then your
   own tints, then premultiply rgb by the combined alpha; for additive slots
   (`deformInfo.z > 0.5`) apply `LinearToSRGB` to the alpha first and output alpha 0 (the
   CPU PMA additive trick).
 - `#pragma target 3.5` or higher (StructuredBuffer + SV_InstanceID).
-- Assign a material with your shader to `GpuSkeletonRenderer.MaterialOverride`. Only the
-  **shader** is taken from the override; the per-page atlas texture and other property
-  values stay with the page material clone. `enableInstancing` is set on the clone.
+- Put the custom GPU shader on the **atlas page materials**. Set `MaterialOverride` to a
+  material that uses **that same shader** so keywords copy through. `ResolveMaterialShader`
+  uses the override only when `page.shader == MaterialOverride.shader`; otherwise it uses
+  `GpuSpineBakedData.DefaultShader` (`GpuSpine/URP/Skeleton`). Atlas textures stay on the
+  cloned page material. `enableInstancing` is set on the clone.
 
 ### Baked vertex layout (your `Attributes` struct must match this)
 
@@ -207,9 +210,11 @@ grows.
 
 Contract (from `Runtime/Core/GpuSkinningManager.cs` and `Runtime/Core/GpuSpineBatch.cs`):
 
-- `GpuSkinningManager.GetBatches(camera)` returns read-only views of the draws submitted this
-  frame (batches with zero submitted instances are skipped). **The list is reused — do not
-  cache it across frames.**
+- `GpuSkinningManager.GetBatches(camera)` returns this camera's draws for the frame.
+  `GetBatches(camera, source)` returns one character's slices and must not overwrite
+  already-submitted merged args. `GetBatches()` is the last prepared camera only.
+  **The list is reused — do not cache it across frames.** Primary plugin submit is
+  `Graphics.RenderMeshIndirect`. GPU instances can still be hit by URP `DrawRenderers`.
 - `GpuSpineBatchInfo` fields:
   - `Mesh` — the baked entry's mesh;
   - `SubmeshIndex` — topology selector (0); actual index range is carried by ArgsBuffer;

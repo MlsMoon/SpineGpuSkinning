@@ -21,27 +21,31 @@ The bone's 2D world affine matrix in skeleton space, exported from
 Apply: `wx = vx * a + vy * b + worldX ; wy = vx * c + vy * d + worldY`
 (`GpuSpineApplyBoneMatrix` in the hlsl include).
 
-## GpuSpineInstanceData — 112 bytes (per-instance draw data)
+## GpuSpineInstanceData — 96 bytes (per-instance draw data)
 
-`Runtime/Core/GpuSpineInstanceData.cs`. Indexed by `SV_InstanceID`.
+`Runtime/Core/GpuSpineInstanceData.cs`. Indexed by `SV_InstanceID` (plus
+`_GpuSpineInstanceOffset` on a slice). HLSL stores three affine rows and rebuilds a
+`float4x4` with a `(0,0,0,1)` last row (`GpuSpineGetLocalToWorld`). This is not a
+112-byte packed `Matrix4x4`.
 
 | C# field | HLSL field | Type | Offset | Content |
 |---|---|---|---|---|
-| `LocalToWorld` | `localToWorld` | Matrix4x4 / **row_major** float4x4 | 0 | `transform.localToWorldMatrix`: skeleton space -> world space |
-| `Color` | `color` | Vector4 / float4 | 64 | Skeleton color (skeleton.R/G/B/A) |
-| `Custom0` | `custom0` | Vector4 / float4 | 80 | Extension slot, via `GpuSpineInstanceDataWriter` |
-| `Custom1` | `custom1` | Vector4 / float4 | 96 | Extension slot, via `GpuSpineInstanceDataWriter` |
+| `LocalToWorldRow0` | `localToWorldRow0` | Vector4 / float4 | 0 | Row 0 of `transform.localToWorldMatrix` |
+| `LocalToWorldRow1` | `localToWorldRow1` | Vector4 / float4 | 16 | Row 1 |
+| `LocalToWorldRow2` | `localToWorldRow2` | Vector4 / float4 | 32 | Row 2 |
+| `Color` | `color` | Vector4 / float4 | 48 | Skeleton color (`skeleton.R/G/B/A`) |
+| `Custom0` | `custom0` | Vector4 / float4 | 64 | Extension slot (MPB copy, then `WriteInstanceData`) |
+| `Custom1` | `custom1` | Vector4 / float4 | 80 | Extension slot |
 
-**`row_major` is load-bearing**: the C# `Matrix4x4` is uploaded as a raw 64-byte copy;
-only `row_major float4x4` matches that byte order, so
-`mul(localToWorld, pos)` applies the C# matrix as-is. Dropping `row_major` transposes
-every instance transform.
+Do not reintroduce a C# `Matrix4x4` field or an HLSL `row_major float4x4` member here.
+The three-row layout is the contract.
 
 ## Structured buffers (material-level bindings)
 
 Bound by `GpuSpineBatch.EnsureCapacity` via `material.SetBuffer` / `material.SetInt`
 (`Runtime/Core/GpuSpineBatch.cs`). Rebinding is mandatory after any buffer recreation
-(capacity growth). Initial capacity 32 instances, grown to `NextPowerOfTwo(required)`.
+(capacity growth), including every offset material. First `PrepareFrame` allocates
+`NextPowerOfTwo(actualCount)` — there is no fixed reserve of 32.
 
 | Binding | Type | Layout / index formula |
 |---|---|---|
@@ -54,17 +58,20 @@ Bound by `GpuSpineBatch.EnsureCapacity` via `material.SetBuffer` / `material.Set
 | `_GpuSpineDeformStride` | `uint` | Deform segment length per instance; 0 for deform-less entries — the buffer is then left unbound and every shader read is short-circuited by the baked deformOffset of -1 |
 | `_GpuSpineSlotColors` | `StructuredBuffer<float4>` (stride 16) | `[instanceID * _GpuSpineSlotCount + slotIndex]` — per-instance slot colors (`slot.R/G/B/A` of every slot, setup-static colors included) |
 | `_GpuSpineSlotCount` | `uint` | Slot color segment length per instance (`Entry.SlotCount`); 0 never happens in practice — the slot color multiply is then short-circuited (slot colors effectively all 1) |
+| `_GpuSpineClipVertices` | `StructuredBuffer<float2>` | `[instanceID * _GpuSpineClipStride + triangleVertex]` — clip triangle vertices for this instance |
+| `_GpuSpineClipRanges` | `StructuredBuffer<float2>` | `[instanceID * _GpuSpineSlotCount + slotIndex]` — `(start, triangleCount)`. `triangleCount == 0` keeps the fragment (`GpuSpineClip` returns) |
+| `_GpuSpineClipStride` | `uint` | `Entry.ClipVertexCapacity`; 0 skips clipping |
+| `_GpuSpineInstanceFilter` | `uint` | `0xFFFFFFFF` = all instances. Any other value folds every other instance to the origin. Slice clones must rebind `-1` |
+| `_GpuSpineInstanceOffset` | `uint` | Added to `SV_InstanceID` (`GpuSpineResolveInstanceID`) |
 
-Upload cadence (`GpuSpineBatch.SubmitFrame`):
+Upload cadence (`GpuSpineBatch` prepare):
 
-- Palette + dynSlot buffers: only when dirty (sort moved instances, membership version
-  changed, instance count changed, or an instance reports `paletteDirty` /
-  `dynamicSlotsDirty`). The dynSlot staging shares the palette's reorder triggers because
-  both are filled in the same sorted loop: `[instanceIndex * dynamicSlotCount + dynSlotId]`.
-  The deform and slot color buffers share the same dirty model and staging layouts
-  `[instanceIndex * deformStride]` / `[instanceIndex * slotCount]`; an instance marks
-  `deformDirty` and `slotColorsDirty` on every `UpdateComplete` (both segments are
-  rebuilt from the live skeleton each frame).
+- Palette, dynSlot, deform, slot color, clip: upload when sort/membership/count force a
+  rewrite, or when that instance's version (`GpuSpineUploadVersions`) differs from the
+  last uploaded version for its slot. Deform and slot-color versions bump only when the
+  CPU compare sees a change — not on every `UpdateComplete`.
+- `IgnoreClipping` instances have `Clipping == null`. Clear that instance's clip **ranges**
+  (vertices are unread when `range.y == 0`).
 - Instance buffer: every frame (transform/color/custom are untracked).
 
 ## Indirect args buffer — uint[5]
@@ -111,9 +118,12 @@ Vertex order: static zone first (setup draw order), then every dynamic slot vari
 - Skinned (x, y) keeps the baked z; `GpuSpineSkinToWorld` then applies the instance's
   `localToWorld`.
 
-## 资源所有权与 args 生命周期
+## Resource ownership and args lifetime
 
-布局视图共享同一 ResourceOwner 的兼容上传组；C#/HLSL 字节布局不变。
-每个相机各自维护组和切片池。同一帧不同几何或实例范围使用不同 args，重复查询相同范围复用该槽位。
-下一帧才可重用 args 槽位；偏移材质不可改成其他实例偏移，避免影响已经排队的命令。
-组拥有骨骼等缓冲及偏移材质，切片只拥有 GraphicsBuffer args。组销毁时分别且仅释放一次。
+Layout views of one `ResourceOwner` share a compatible upload group. C# / HLSL byte
+layouts stay as declared above. Each camera owns its groups and slice pool. Different
+geometry or instance ranges in the same frame take different args slots; a repeated
+query of the same range reuses that slot. A slot must not be rewritten later in the
+same frame (main draw vs single-character outline). Offset materials keep one instance
+offset for their life. The group owns bone/instance/deform/color/clip buffers and
+offset materials; a slice owns only its `GraphicsBuffer` args. Dispose each once.

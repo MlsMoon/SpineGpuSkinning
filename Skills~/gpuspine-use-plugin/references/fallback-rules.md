@@ -1,143 +1,105 @@
 # GpuSpine: CPU Fallback Rules
 
-Every feature of a skeleton that interacts with a statically baked prototype mesh is
-graded by the audit (`Runtime/Baking/GpuSpineAuditor.cs`, report in
-`Runtime/Baking/GpuSpineAuditReport.cs`) and by the component's admittance checks
+Graded by `Runtime/Baking/GpuSpineAuditor.cs` and by component admittance
 (`Runtime/GpuSkeletonRenderer.cs`). This file is the complete rule set.
 
 ## Grade model
 
-| Grade | Meaning | Baking | Runtime behavior |
-|---|---|---|---|
-| Hard failure | Feature rewrites the baked vertex stream at runtime | Blocked entirely (container keeps the report only); a per-combination overflow blocks just that entry | Component refuses the GPU path |
-| Warning | Tolerated deviation | Baked normally | GPU path allowed; draw-order/clipping warnings additionally require an opt-in component option |
-| Dynamic slot | AttachmentTimeline-driven slot | Every attachment variant pre-baked | GPU path with per-instance variant folding in the vertex shader |
-| Deform slot | DeformTimeline-driven slot | Deform segment layout pre-baked (per-slot prefix/capacity, per-attachment defaults) | GPU path: the CPU-computed `slot.Deform` is uploaded per instance per frame and applied in the vertex shader before the bone weighting |
-| Slot color | RGBATimeline / RGBTimeline / AlphaTimeline-driven slot | Nothing extra (all slots' colors ride the buffer anyway) | GPU path: `slot.R/G/B/A` of every slot is uploaded per instance per frame and multiplied into the vertex color |
-| Slot color | RGBATimeline / RGBTimeline / AlphaTimeline-driven slot | Nothing extra (all slots' colors ride the buffer anyway) | GPU path: `slot.R/G/B/A` of every slot is uploaded per instance per frame and multiplied into the vertex color |
-
-## Hard failures (audit.Passed = false)
-
-Detected by `GpuSpineAuditor.Audit` unless noted. A failed audit writes the container with
-the report only — no entry meshes — and every `GpuSkeletonRenderer` on that skeleton logs
-a warning and stays on the CPU path.
-
-| Finding | Why baking breaks | Report text pattern |
+| Grade | Baking | Runtime |
 |---|---|---|
-| Dark color timeline: `RGBA2Timeline`, `RGB2Timeline` | Tint black (second color) is not implemented by the GPU path | `Animation '{anim}' contains a dark color timeline ({type}, slot '{slot}'): tint black is not supported by the GPU path.` |
-| `Sequence` on a `RegionAttachment` or `MeshAttachment` | uvs change per frame; baked uvs would be invalid | `'{Region|Mesh}Attachment' '{att}' (skin '{skin}', slot '{slot}') has a Sequence: uv changes per frame, baked uvs would be invalid.` |
-| Vertex count overflow, detected by the baker | Defensive cap `MaxVertexCount = 1 << 20` (1,048,576) per entry (static zone + all dynamic variants) | `Entry '{combo}' would bake {n} vertices (limit 1048576): vertex count overflow.` The entry is recorded with a null mesh; other combinations still bake. |
+| Hard failure | Container keeps the report only (or that entry has a null mesh) | GPU path refused |
+| Warning | Baked normally | GPU path continues. Draw-order and clipping warnings are informational; they are not opt-in gates |
+| Dynamic slot | Every attachment variant pre-baked | Per-instance variant folding in the vertex shader |
+| Deform slot | Segment layout pre-baked | `slot.Deform` uploaded and applied before bone weighting |
+| Slot color | Nothing extra (every slot rides the buffer) | `slot.R/G/B/A` uploaded and multiplied into vertex color |
+
+## Hard failures (`audit.Passed = false`)
+
+A failed audit writes the container with the report only. Every `GpuSkeletonRenderer`
+on that skeleton stays on the CPU path.
+
+| Finding | Why | Report text pattern |
+|---|---|---|
+| Dark color: `RGBA2Timeline`, `RGB2Timeline` | Tint black is not implemented | `Animation '{anim}' contains a dark color timeline ({type}, slot '{slot}'): tint black is not supported by the GPU path.` |
+| `Sequence` on Region/Mesh | UVs change per frame | `'{Region\|Mesh}Attachment' '{att}' (skin '{skin}', slot '{slot}') has a Sequence: uv changes per frame, baked uvs would be invalid.` |
+| Vertex overflow (`MaxVertexCount = 1 << 20`) | Baker-side | `Entry '{combo}' would bake {n} vertices (limit 1048576): vertex count overflow.` That entry stores a null mesh. |
 | `SkeletonData` null | Nothing to audit | `SkeletonData is null.` |
+
+Deform timelines and RGBA/RGB/Alpha slot-color timelines are **not** failures.
 
 ## Tolerated warnings
 
-Warnings never flip `Passed`; baking proceeds. Two of them are gated again at runtime:
+Warnings never flip `Passed`. Current runtime does **not** require
+`AllowDrawOrderTimeline` or `IgnoreClipping` to stay on the GPU path.
 
-| Finding | Runtime default | Opt-in | Consequence of opting in |
-|---|---|---|---|
-| `DrawOrderTimeline` found | CPU path with a warning | `GpuSkeletonRenderer.AllowDrawOrderTimeline = true` | Runtime draw order changes may reorder overlapping attachments against the baked setup order (overlap artifacts) |
-| `ClippingAttachment` in any skin | CPU path with a warning | `GpuSkeletonRenderer.IgnoreClipping = true` | Clipped regions render unclipped |
-| Vertex with > 4 bone influences | GPU path continues | — | Baker keeps the strongest 4 influences and renormalizes the weights; count reported as `TruncatedVertexCount` |
-
-Report text patterns:
-
-- `Animation '{anim}' contains a DrawOrderTimeline: tolerated, runtime draw order changes may reorder overlapping attachments against the baked setup order.`
-- `ClippingAttachment '{att}' (skin '{skin}', slot '{slot}'): tolerated, clipped regions render unclipped on the GPU path.`
-
-## Deform slots (DeformTimeline support)
-
-A deform hit no longer blocks baking. `slot.Deform` is computed by the CPU `AnimationState`
-every frame anyway; the component copies it into a per-instance deform segment
-(`Vector2[entry.DeformStride]`) that the batch uploads alongside the bone palette, and the
-vertex shader applies it to each influence's local coordinate **before** the bone weighting:
-
-- Unweighted attachment (region / unweighted mesh, mode 0): the deform value replaces the
-  local coordinate absolutely (`VertexAttachment.cs:106-108`).
-- Weighted mesh (mode 1): the deform value is added per influence (`VertexAttachment.cs:139-147`);
-  a vertex stores influence 0's float2 index and influence `i` reads `deformOffset + i`
-  (per-influence deform elements are consecutive in `Vertices` expansion order). Vertices
-  truncated to 4 influences have deform disabled (deformOffset -1).
-- No active deform (`slot.Deform.Count == 0`): the runtime writes the current attachment's
-  baked `DefaultValues` (unweighted: local positions; weighted: all zeros = undeformed),
-  or all zeros when the attachment is not a baked deform target. Correctness of the
-  `Count > 0` match: `DeformTimeline.Apply` only writes when the slot's attachment resolves
-  to the timeline's target (`Animation.cs:1773-1776`), and the attachment setter clears
-  deform on an attachment change (`Slot.cs:139-156`).
-- `MeshAttachment '{att}' (slot '{slot}') has {n} vertex(es) with more than 4 bone influences; kept the strongest 4 and renormalized.`
-
-## Runtime admittance gates (component OnEnable, in evaluation order)
-
-Even with a passed audit, the component refuses the GPU path when any of these hits
-(`Runtime/GpuSkeletonRenderer.cs`). All messages are prefixed with
-`GpuSkeletonRenderer stays on the CPU path`:
-
-| Gate | Severity | Message |
+| Finding | Runtime | Notes |
 |---|---|---|
-| No `SkeletonAnimation`/`MeshRenderer` on the same GameObject or a child | `Debug.Log` | `... it requires a SkeletonAnimation and a MeshRenderer on the same GameObject or a child.` |
-| No `SkeletonDataAsset` assigned | `Debug.Log` | `... no SkeletonDataAsset assigned.` |
-| No container: `BakedData` field null and registry miss | `LogWarning` | `... no GpuSpineBakedData available for the SkeletonDataAsset (assign BakedData or register one via GpuSpineBakedRuntime).` |
-| Audit null or `Passed == false` | `LogWarning` | `..., audit failed. First reason: {reason}` |
-| `HasDrawOrderTimeline` and `!AllowDrawOrderTimeline` | `LogWarning` | `... the skeleton uses a draw order timeline, which can reorder overlapping attachments against the baked setup order. Set AllowDrawOrderTimeline to accept the artifacts.` |
-| `HasClipping` and `!IgnoreClipping` | `LogWarning` | `... the skeleton uses a clipping attachment, which the GPU path renders unclipped. Set IgnoreClipping to accept unclipped rendering.` |
-| `SkeletonRenderer.zSpacing != BakedZSpacing` (0) | `LogWarning` | `... zSpacing {x} differs from the baked zSpacing 0 (baking is fixed to 0 in v1).` |
-| Skeleton not initialized | `Debug.Log` | `... the skeleton is not initialized.` |
-| No entry whose content key matches the current skin combination | `LogWarning` | `... no baked entry for the current skin combination (key {key}). Rebake the SkeletonDataAsset or declare the combination on its GpuSpineBakedData.` |
+| `DrawOrderTimeline` | GPU: live order hash selects a baked `DrawOrderLayouts` entry | `AllowDrawOrderTimeline` is unused legacy. Missing layout (stale bake) → CPU |
+| `ClippingAttachment` | GPU: `GpuSpineClippingState` + `GpuSpineClip` | `IgnoreClipping` uploads zero ranges (`range.y == 0` keeps fragments). It does not force CPU |
+| Vertex with > 4 influences | GPU continues | Strongest 4 kept, weights renormalized; `TruncatedVertexCount` |
 
-## Mid-play fallback (skin combination change)
+Current report text still says "tolerated". Treat the table above as the behavior, not
+the historical "unclipped / overlap artifacts" wording in older skill copies.
 
-The component recomputes the content key every `UpdateComplete`. When the effective skin
-combination changes to one without a baked entry, it restores the CPU path and logs:
+## Deform slots
 
-`GpuSkeletonRenderer fell back to the CPU path: no baked entry for the new skin combination (key {key}).`
+`slot.Deform` is computed by CPU `AnimationState`. The component copies it into a
+per-instance `Vector2[entry.DeformStride]` segment.
 
-With an entry, the instance just moves to the new entry's batches — no CPU round-trip.
+- Unweighted (mode 0): deform replaces the local coordinate (`VertexAttachment.cs:106-108`).
+- Weighted (mode 1): deform adds per influence (`:139-147`). Influence `i` reads
+  `deformOffset + i`. Vertices truncated to 4 influences have deform disabled (`-1`).
+- `slot.Deform.Count == 0`: write the attachment's baked `DefaultValues` (unweighted:
+  local positions; weighted: zeros), or zeros when the name is not a baked deform target.
+- Match attachments by `Name`, never the skin placeholder key.
 
-## AttachmentTimeline → dynamic slots (not a failure)
+## Slot colors
 
-An `AttachmentTimeline` never fails the audit. The driven slot becomes a **dynamic slot**:
+Every slot's `slot.R/G/B/A` uploads into `_GpuSpineSlotColors`
+(`[instanceID * _GpuSpineSlotCount + slotIndex]`; TEXCOORD7 carries the slot index).
+Shader composition matches CPU PMA (`MeshGenerator.cs:953-972`) including the additive
+gamma trick (`:667-670`). Dark color timelines stay a hard failure.
 
-- Baking: the slot emits no static vertices. Every attachment variant registered for the
-  slot (default skin + every named skin, ordinal-sorted) that resolves through the entry's
-  effective skin (default skin fallback) and is renderable (Region/Mesh) is baked after the
-  static zone, in `(dynSlotId, variantId)` order, and recorded in
-  `GpuSpineBakedEntry.DynamicVariants`. Variant vertices carry `(dynSlotId, variantId)` in
-  `TEXCOORD5`; static vertices carry `(-1, -1)`.
-- `dynSlotId` is the slot's position in the audit's `DynamicSlots` table (slot index
-  order) — stable for a given SkeletonData. `variantId` numbers the renderable variants of
-  one slot ascending in ordinal attachment-name order.
-- Runtime: every `UpdateComplete`, the component resolves `Slot.Attachment.Name` against
-  the entry's variant lookup and uploads one selected variant id per dynamic slot through
-  the per-batch `_GpuSpineDynSlots` buffer.
-- The vertex shader folds every vertex of an unselected variant to a single point; the
-  triangle degenerates to zero area and produces no fragments.
-- **Hidden state**: a slot with no attachment (timeline keyframe null) selects
-  `0xFFFFFFFF` (`FoldAllVariants`), folding every variant of the slot.
-- **Stale bake**: an attachment live on the slot whose name is not a baked variant also
-  folds the slot (hidden), with a one-time warning per (slot, attachment) per entry:
-  `GpuSkeletonRenderer: attachment '{att}' of dynamic slot '{slot}' is not a baked variant; folding all variants of the slot. Rebake the SkeletonDataAsset.`
+## Runtime admittance (OnEnable, in order)
+
+Messages are prefixed with `GpuSkeletonRenderer stays on the CPU path` and are compiled
+out unless `GpuSpineDiagnostics.EnableLogging`.
+
+| Gate | Message |
+|---|---|
+| No `SkeletonAnimation` / `MeshRenderer` | `... it requires a SkeletonAnimation and a MeshRenderer on the same GameObject or a child.` |
+| No `SkeletonDataAsset` | `... no SkeletonDataAsset assigned.` |
+| No container | `... no GpuSpineBakedData available ...` |
+| `!bakedData.IsCompatible` or `SourceAsset` mismatch | `... incompatible baked format or source asset. Rebake the skeleton.` (`FormatVersion` must equal `GpuSpineBaker.BakeFormatVersion`, currently 5.) |
+| Audit null or `Passed == false` | `..., audit failed. First reason: {reason}` |
+| `zSpacing != BakedZSpacing` (0) | `... zSpacing {x} differs from the baked zSpacing 0 ...` |
+| Skeleton not initialized | `... the skeleton is not initialized.` |
+| No entry, or `ResolveEntry` returned null | `... no baked entry for the current skin combination (key {key}).` |
+
+`ResolveEntry`:
+
+1. If `entry.DrawOrderLayouts` is non-empty, return `FindOrderedEntry(orderKey)`.
+2. Else if `HasDrawOrderTimeline || HasClipping`, return null (stale bake).
+3. Else return the setup-order entry.
+
+There is **no** admittance check on `AllowDrawOrderTimeline` or `IgnoreClipping`.
+
+## Mid-play fallback
+
+Skin or draw-order change without a baked layout restores the CPU path:
+`GpuSkeletonRenderer: missing baked skin or draw-order layout.`
+With a layout, the instance moves groups — no CPU round-trip.
+
+## AttachmentTimeline → dynamic slots
+
+Not a failure. Driven slots emit no static vertices. Variants bake after the static zone
+in `(dynSlotId, variantId)` order (`TEXCOORD5`). Runtime uploads one selected variant id
+per slot (`0xFFFFFFFF` = fold all). Unselected variants collapse to a point.
+
+Stale bake (live `Attachment.Name` not in the variant table) folds the slot and, when
+logging is on, warns once per (slot, name) per entry.
 
 ## What "CPU fallback" means
 
-The instance renders exactly as if the component were not there: `updateMode` and the
-`MeshRenderer` are never touched (or fully restored when the fallback happens mid-play or
-on disable). There is no partial GPU state, no residual buffer, and no required action —
-fixing the cause (rebake, declare the combo, set the option) lets the next enable switch
-to the GPU path automatically.
-
-## Slot colors (RGBATimeline / RGBTimeline / AlphaTimeline support)
-
-Every slot's `slot.R/G/B/A` is uploaded per instance per frame in the `_GpuSpineSlotColors`
-buffer (stride 16, `[instanceID * _GpuSpineSlotCount + slotIndex]`; every vertex carries its
-slot index in TEXCOORD7). The vertex shader composes the final color exactly like the CPU
-(`MeshGenerator.cs:953-972`): `attachment COLOR x slot color x instance skeleton color`,
-then premultiplies rgb by the combined alpha (PMA). Additive-blend slots no longer bake
-alpha 0 into COLOR: they carry `additiveFlag = 1` in TEXCOORD6.z, and the shader applies
-the CPU's additive trick at draw time (`alpha = LinearToSRGB(alpha)` compensation from
-`MeshGenerator.cs:667-670`, premultiply, then `color.a = 0` so
-`Blend One OneMinusSrcAlpha` adds fully, `MeshGenerator.cs:955, 964-965`). Dark color
-timelines (RGBA2/RGB2, tint black) stay a hard failure.
-
-**Name-vs-key pitfall**: an attachment's `Name` (e.g. `CatS_01/body`, from the JSON `name`
-field) can differ from its skin placeholder key (e.g. `body`). The dynamic slot table and
-the deform segment resolution both match by `Name` — matching by key silently folds every
-dynamic variant and resolves every deform segment empty (the skeleton renders nothing).
+`updateMode` and `forceRenderingOff` are never touched, or are fully restored. No partial
+GPU state remains.

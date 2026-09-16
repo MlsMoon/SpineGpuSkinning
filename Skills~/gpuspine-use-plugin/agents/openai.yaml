@@ -1,4 +1,4 @@
 interface:
   display_name: "GpuSpine: Use the Plugin"
-  short_description: "Integrate, configure and troubleshoot SpineGpuSkinning."
-  default_prompt: "Please use $gpuspine-use-plugin to complete the task."
+  short_description: "Integrate GpuSkeletonRenderer, baking, fallback, custom shader/RenderPass, runtime switch."
+  default_prompt: "Read AGENTS.md and $gpuspine-use-plugin before writing any SpineGpuSkinning integration code. Use the current contract in AGENTS.md if older docs disagree."
