@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Spine;
 
@@ -11,8 +11,7 @@ namespace GpuSpine.Baking {
 	/// <item>Hard failures (<see cref="GpuSpineAuditReport.Failures"/>): dark color timelines (RGBA2,
 	/// RGB2; tint black is not implemented) and attachment sequences (uvs change per frame).</item>
     /// <item>Warnings (<see cref="GpuSpineAuditReport.Warnings"/>): draw order timelines and clipping
-	/// <item>Warnings (<see cref="GpuSpineAuditReport.Warnings"/>): draw order timelines and clipping
-	/// attachments are tolerated deviations; influence truncation notices are appended by the baker.</item>
+	/// attachments are tolerated; GPU path replays layouts and evaluates clip unless IgnoreClipping.</item>
 	/// <item>Dynamic slots (<see cref="GpuSpineAuditReport.DynamicSlots"/>): attachment timelines are
 	/// supported by pre-baking every attachment variant of the driven slot (see <see cref="GpuSpineBaker"/>).</item>
 	/// <item>Deform slots (<see cref="GpuSpineAuditReport.DeformSlots"/>): deform timelines are supported
@@ -74,7 +73,7 @@ namespace GpuSpine.Baking {
 						if (timeline is DrawOrderTimeline) {
 							report.HasDrawOrderTimeline = true;
 							Warn(report, string.Format(
-								"Animation '{0}' contains a DrawOrderTimeline: tolerated, runtime draw order changes may reorder overlapping attachments against the baked setup order.",
+								"Animation '{0}' contains a DrawOrderTimeline: tolerated, GPU path replays baked draw-order layouts.",
 								animation.Name));
 							continue;
 						}
@@ -119,7 +118,7 @@ namespace GpuSpine.Baking {
 				if (attachment is ClippingAttachment) {
 					report.HasClipping = true;
 					Warn(report, string.Format(
-						"ClippingAttachment '{0}' (skin '{1}', slot '{2}'): tolerated, clipped regions render unclipped on the GPU path.",
+						"ClippingAttachment '{0}' (skin '{1}', slot '{2}'): tolerated, GPU path evaluates fragment clipping unless IgnoreClipping is set.",
 						attachment.Name, skin.Name, SlotName(data.Slots, entry.SlotIndex)));
 					continue;
 				}

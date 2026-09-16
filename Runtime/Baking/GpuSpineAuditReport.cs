@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace GpuSpine.Baking {
@@ -57,11 +57,11 @@ namespace GpuSpine.Baking {
 		/// <summary>Tolerated deviations: draw order timelines, clipping attachments and influence
 		/// truncation notices appended during baking.</summary>
 		public List<string> Warnings = new List<string>();
-		/// <summary>True when any animation contains a DrawOrderTimeline. Tolerated: runtime draw order
-		/// changes may reorder overlapping attachments incorrectly against the baked setup order.</summary>
+		/// <summary>True when any animation contains a DrawOrderTimeline. Tolerated: GPU path
+		/// replays baked draw-order layouts. A stale container without layouts falls back to CPU.</summary>
 		public bool HasDrawOrderTimeline;
-		/// <summary>True when any skin contains a ClippingAttachment. Tolerated: clipped regions render
-		/// unclipped on the GPU path.</summary>
+		/// <summary>True when any skin contains a ClippingAttachment. Tolerated: GPU path evaluates
+		/// fragment clipping unless IgnoreClipping is set.</summary>
 		public bool HasClipping;
 		/// <summary>Number of vertices with more than 4 bone influences that were fixed by truncation
 		/// (strongest 4 influences kept, weights renormalized) during baking. Filled by the baker, not
