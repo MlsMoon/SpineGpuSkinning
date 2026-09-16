@@ -3,7 +3,7 @@ using UnityEditor;
 using UnityEngine;
 
 namespace GpuSpine.Editor {
-    /// <summary>生成数据只读；仅保留皮肤组合声明作为可编辑的烘焙输入。</summary>
+    /// <summary>Generated fields are read-only. Only DeclaredCombos stay editable as a bake input.</summary>
     [CustomEditor(typeof(GpuSpineBakedData))]
     public sealed class GpuSpineBakedDataEditor : UnityEditor.Editor {
         public override void OnInspectorGUI() {
@@ -27,7 +27,7 @@ namespace GpuSpine.Editor {
             }
         }
 
-        /// <summary>允许展开查看嵌套审计与条目，但禁止改值、引用和数组长度。</summary>
+        /// <summary>Allow expanding nested audit and entries, but block value, reference, and array-size edits.</summary>
         static void DrawReadOnly(SerializedProperty property) {
             if (!property.hasVisibleChildren || property.propertyType == SerializedPropertyType.ObjectReference) {
                 using (new EditorGUI.DisabledScope(true)) EditorGUILayout.PropertyField(property, false);

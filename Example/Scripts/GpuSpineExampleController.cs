@@ -2,7 +2,7 @@
 using UnityEngine;
 
 namespace GpuSpine.Example {
-    /// <summary>独立示例入口：人群、蒙皮切换、相机与帧率采样。</summary>
+    /// <summary>Standalone example entry: crowd, skinning toggle, camera, and frame-time sampling.</summary>
     public sealed class GpuSpineExampleController : MonoBehaviour {
         public GpuSpineExampleWalker AdventurerPrefab;
         public GpuSpineExampleWalker RobotPrefab;
@@ -65,7 +65,7 @@ namespace GpuSpine.Example {
             SetCount(InitialCount);
         }
 
-        /// <summary>数量只在提交后生效；保留已有实例，统计只比较相同数量。</summary>
+        /// <summary>Count applies only after submit. Existing instances are kept. Stats compare the same count only.</summary>
         public void SetCount(int count) {
             count = Mathf.Clamp(count, 0, 1000);
             if (m_target == count && m_initialized && !IsBuilding && m_aspect > 0) return;
@@ -75,7 +75,7 @@ namespace GpuSpine.Example {
             ResetMeasurement();
         }
 
-        /// <summary>只启停插件组件，不重新创建骨架或重播动画。</summary>
+        /// <summary>Enable or disable the plugin component only. Does not recreate skeletons or replay animation.</summary>
         public void SetGpuEnabled(bool enabledGpu) {
             m_gpu = enabledGpu;
             ApplyMode(m_people);
@@ -83,7 +83,7 @@ namespace GpuSpine.Example {
             ResetMeasurement();
         }
 
-        /// <summary>-1 混合皮肤；0/1/2 为两种角色对应的三套皮肤。</summary>
+        /// <summary>-1 mixed skins. 0/1/2 pick the three skins of each character pair.</summary>
         public void SetSkinSelection(int selection) {
             m_skinSelection = Mathf.Clamp(selection, -1, 2);
             foreach (var walker in m_people) walker.ApplySkin(m_skinSelection);
@@ -92,7 +92,7 @@ namespace GpuSpine.Example {
             ResetMeasurement();
         }
 
-        /// <summary>案例切换分帧回收旧角色，再按原数量创建新角色。</summary>
+        /// <summary>Case changes recycle old characters across frames, then spawn the same count again.</summary>
         public void SetComplexCase(bool complex) {
             m_requestedComplex = complex;
             UltraRequested = false;
@@ -102,7 +102,7 @@ namespace GpuSpine.Example {
             ResetMeasurement();
         }
 
-        /// <summary>切换 100 骨骼超复杂案例，角色数不变。</summary>
+        /// <summary>Switch to the 100-bone stress case without changing character count.</summary>
         public void SetUltraCase(bool ultra) {
             UltraRequested = ultra;
             ProductionRequested = ultra;
@@ -126,7 +126,7 @@ namespace GpuSpine.Example {
             m_settleUntil = Time.unscaledTime + 1f;
         }
 
-        /// <summary>生产猫负载：使用高复杂角色并固定 300 实例，专门用于观察 CPU Mesh 节省。</summary>
+        /// <summary>Production stress profile: high-complexity character at 300 instances, for CPU mesh-cost comparison.</summary>
         public void SetProductionCase() {
             ProductionRequested = true;
             UltraRequested = true;
@@ -193,7 +193,7 @@ namespace GpuSpine.Example {
             int totalRows = UltraRequested || m_complex ? rows : rows * 2;
             float bottom = -(totalRows - 1) * 2.05f - 0.7f;
             float top = 1.8f;
-            // 顶部保留 30% 画面给 UI，世界取景不依赖 IMGUI 的像素缩放。
+            // Keep the top 30% of the view for UI. World framing does not depend on IMGUI pixel scale.
             float worldHeight = top - bottom;
             float half = Mathf.Max(worldHeight / 1.4f, (width + 1f) / (2f * m_aspect));
             ExampleCamera.orthographicSize = half;

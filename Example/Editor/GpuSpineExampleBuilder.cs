@@ -10,7 +10,7 @@ using UnityEngine.SceneManagement;
 using UnityEngine.Rendering.Universal;
 
 namespace GpuSpine.Example.Editor {
-    /// <summary>重建可移植示例资产；不替换或保存用户当前打开的场景。</summary>
+    /// <summary>Rebuild portable example assets. Does not replace or save the user's open scene.</summary>
     public static class GpuSpineExampleBuilder {
         public static string ExampleRoot {
             get {
@@ -151,7 +151,7 @@ namespace GpuSpine.Example.Editor {
             } finally { UnityEngine.Object.DestroyImmediate(go); }
         }
 
-        /// <summary>显式保留直通 Alpha 和实例化变体，防止 Player 剥离后出现透明边缘杂色。</summary>
+        /// <summary>Keep straight alpha and instancing variants so Player stripping does not dirty transparent edges.</summary>
         static ShaderVariantCollection EnsureShaderVariants() {
             var variants = LoadOrCreate<ShaderVariantCollection>(ExampleRoot + "/ExampleGpu.shadervariants",
                 () => new ShaderVariantCollection());

@@ -2,7 +2,7 @@
 using Unity.Profiling;
 using UnityEngine;
 namespace GpuSpine.Core {
-    /// <summary>固定 marker 与无分配计数；不输出日志，不改变更新节奏。</summary>
+    /// <summary>Fixed markers and allocation-free counters. No logs, no change to update cadence.</summary>
     public static class GpuSpineCpuDiagnostics {
         internal static readonly ProfilerMarker Skin = new("GpuSpine.Source.SkinKey");
         internal static readonly ProfilerMarker Order = new("GpuSpine.Source.DrawOrder");

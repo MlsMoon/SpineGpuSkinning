@@ -21,6 +21,19 @@ Copy a skill folder into the host project's `.agents/skills/` or `.cursor/skills
 - The runtime never bakes. Missing or incompatible baked data stays on the CPU path.
 - Verify signatures in this repo before calling them. Cross-session memory is untrusted.
 - Host-project smoke tools hang under `Tools/GPUSpineSkin/Temp`, not a new top-level menu.
+- Agent-facing text in this repository is English: `AGENTS.md`, `Skills~/`, XML comments,
+  and git commit subjects/bodies.
+
+## Git commits
+
+Format: `type(scope): description`
+
+- `type`: `feat` / `fix` / `docs` / `refactor` / `perf` / `test` / `chore` / `style` / `build` / `ci` / `revert`
+- `scope` (optional): `gpuspine`, `runtime`, `editor`, `example`, `docs`
+- Description: English, imperative, no trailing period, subject ≤ 72 characters
+- Examples:
+  - `fix(runtime): skip clip-range copy when IgnoreClipping is set`
+  - `docs(gpuspine): add AGENTS.md and sync current contract`
 
 ## Current contract (do not use older docs)
 

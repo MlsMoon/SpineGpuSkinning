@@ -4,7 +4,7 @@ using UnityEditor;
 using UnityEngine;
 
 namespace GpuSpine.Example.Editor {
-    /// <summary>无 UI 自动化的示例控制入口，供编辑器工具与本地 CLI 复用。</summary>
+    /// <summary>Headless example control for editor tools and local CLI.</summary>
     public static class GpuSpineExampleControl {
         public const string RequestKey = "GpuSpine.Example.Request";
         public const string ResultKey = "GpuSpine.Example.Result";
@@ -44,7 +44,7 @@ namespace GpuSpine.Example.Editor {
             if (!result.success) Debug.LogError("GpuSpine Example control: " + json);
         }
 
-        /// <summary>action: status / count / gpu / skin / case / freeze；value 为整数参数。</summary>
+        /// <summary>action: status / count / gpu / skin / case / freeze. value is an integer argument.</summary>
         public static Result Apply(Request request) {
             if (!EditorApplication.isPlaying) throw new InvalidOperationException("Example controls require Play Mode.");
             var controller = UnityEngine.Object.FindObjectOfType<GpuSpineExampleController>();

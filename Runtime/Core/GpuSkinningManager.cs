@@ -47,7 +47,7 @@ namespace GpuSpine {
             return true;
         }
 
-        /// <summary>注册与布局切换共享资源有效性检查。</summary>
+        /// <summary>Shared validity check for register and layout-change.</summary>
         static bool IsValidEntry(GpuSkeletonRenderer renderer, GpuSpineBakedEntry entry) {
             if (entry == null || entry.Mesh == null || entry.Submeshes == null || entry.Submeshes.Length == 0) return false;
             foreach (var part in entry.Submeshes) {
@@ -92,7 +92,7 @@ namespace GpuSpine {
                 GpuSpineBatch.SlicesCreated, GpuSpineBakedEntry.LayoutMeshesBuilt
             };
         }
-        /// <summary>返回值类型快照，供连续采样使用；旧数组 API 保持七项兼容。</summary>
+        /// <summary>Value-type snapshot for continuous sampling. The old array API keeps a 7-item compatible shape.</summary>
         public static GpuSpineLifecycleCounters GetLifecycleSnapshot() => new GpuSpineLifecycleCounters {
             EntryChanges = EntryChanges,
             BatchesCreated = GpuSpineCameraFrame.BatchesCreated,

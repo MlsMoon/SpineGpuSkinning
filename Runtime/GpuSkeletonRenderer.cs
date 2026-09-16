@@ -598,8 +598,8 @@ namespace GpuSpine {
 			return (data.cameraRenderingLayerMask & SourceRenderer.renderingLayerMask) != 0;
 		}
 
-        /// <summary>最近一次上传组的调试索引；多相机/多材质重绘请使用 GetBatches(camera, source)，
-        /// 不把此值作为所有上传组的通用实例索引。</summary>
+        /// <summary>Debug index of the last upload group. For multi-camera or multi-material redraws use GetBatches(camera, source);
+        /// do not treat this as a universal instance index across groups.</summary>
 		public int BatchInstanceIndex { get; internal set; } = -1;
 
 		/// <summary>Version observed independently by every upload target.</summary>

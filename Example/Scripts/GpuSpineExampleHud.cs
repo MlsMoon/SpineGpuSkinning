@@ -1,7 +1,7 @@
 ﻿using UnityEngine;
 
 namespace GpuSpine.Example {
-    /// <summary>无额外 UI 包依赖的帧率与人群控制面板。</summary>
+    /// <summary>FPS and crowd control HUD with no extra UI package.</summary>
     public sealed class GpuSpineExampleHud : MonoBehaviour {
         public GpuSpineExampleController Controller;
         GUIStyle m_title;

@@ -1,4 +1,4 @@
 ﻿namespace GpuSpine.Core {
-    /// <summary>独立上传通道；索引顺序仅用于诊断。</summary>
+    /// <summary>Independent upload channel. Index order is diagnostic only.</summary>
     public enum GpuSpineDataChannel { Palette, DynamicSlots, Deform, SlotColors, Clipping, Instances }
 }

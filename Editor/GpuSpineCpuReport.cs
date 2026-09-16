@@ -4,7 +4,7 @@ using GpuSpine.Core;
 using UnityEditor;
 using UnityEngine;
 namespace GpuSpine.Editor {
-    /// <summary>显式导出 CPU 传输计数，供 CLI 或人工做采样前后差分；不自动运行。</summary>
+    /// <summary>Explicit CPU transfer counters for CLI or manual before/after diffs. Does not run by itself.</summary>
     public static class GpuSpineCpuReport {
         [Serializable] sealed class Channel {
             public string name;

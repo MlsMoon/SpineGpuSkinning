@@ -1,6 +1,6 @@
 ﻿using System;
 namespace GpuSpine.Core {
-    /// <summary>本相机本帧的独立绘制范围；不同范围不可复用同一个在途 args。</summary>
+    /// <summary>Independent draw range for this camera this frame. Different ranges must not reuse in-flight args.</summary>
     internal readonly struct GpuSpineSliceKey : IEquatable<GpuSpineSliceKey> {
         readonly int indexStart, indexCount, start, count;
         public GpuSpineSliceKey(int indexStart, int indexCount, int start, int count) {

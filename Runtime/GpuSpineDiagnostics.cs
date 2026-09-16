@@ -1,8 +1,8 @@
 ﻿namespace GpuSpine {
-    /// <summary>插件诊断日志总开关；关闭时编译器移除调用和日志参数构造。</summary>
+    /// <summary>Master switch for plugin diagnostic logs. When false the compiler strips calls and argument construction.</summary>
     public static class GpuSpineDiagnostics {
         public const bool EnableLogging = false;
-        /// <summary>自动冒烟、截图和性能验证总控；优先于历史 EditorPrefs 与验证构建参数。</summary>
+        /// <summary>Master gate for automatic smoke, screenshots, and performance validation. Overrides older EditorPrefs and validation build flags.</summary>
         public const bool EnableAutomaticValidation = false;
     }
 }

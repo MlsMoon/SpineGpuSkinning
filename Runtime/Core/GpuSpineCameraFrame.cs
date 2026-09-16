@@ -128,7 +128,7 @@ namespace GpuSpine.Core {
                 GpuSkeletonRenderer source = orderedSources[i];
                 GpuSpineBakedEntry entry = entriesByInstance[source];
                 int count = 1;
-                // 只有单段且几何范围一致才合并实例，多段严格保持整只角色的画家顺序。
+                // Merge instances only for a single segment with the same geometry range. Multi-segment characters keep per-character painter order.
                 if (entry.Submeshes.Length == 1) {
                     GpuSpineBatch batch = batchesByInstance[source][0];
                     int start = batch.FindSourceIndex(source);
@@ -181,10 +181,10 @@ namespace GpuSpine.Core {
             return selectedDraws;
         }
 
-        /// <summary>仅绘制范围变化时保留成员与缓冲，避免每次动画换序重新分配 joined 列表。</summary>
+        /// <summary>Keep members and buffers when only the draw range changes, so an animation reorder does not rebuild the joined list.</summary>
         public void ChangeLayout(GpuSkeletonRenderer source, GpuSpineBakedEntry entry) {
             if (!batchesByInstance.TryGetValue(source, out var joined)) return;
-            // 新布局所需组必须已存在；页面集合变化仍走完整解除与注册。
+            // The group required by the new layout must already exist. A page-set change still unregisters and registers fully.
             for (int part = 0; part < entry.Submeshes.Length; part++) {
                 if (!batches.TryGetValue(new BatchKey(entry, part, source), out var batch) || !joined.Contains(batch)) {
                     Remove(source); return;

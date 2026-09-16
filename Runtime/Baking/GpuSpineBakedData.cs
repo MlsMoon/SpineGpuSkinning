@@ -211,7 +211,7 @@ namespace GpuSpine.Baking {
 			return parts;
 		}
 
-		/// <summary>布局视图共享骨架数据和 GPU 缓冲所有者，索引范围由绘制切片持有。</summary>
+		/// <summary>Layout views share skeleton data and the GPU buffer owner. Draw slices hold the index range.</summary>
 		internal GpuSpineBakedEntry ResourceOwner => runtimeOwner ?? this;
 
 		public void RetainRuntimeLayout () { if (runtimeOwner != null) runtimeUsers++; }

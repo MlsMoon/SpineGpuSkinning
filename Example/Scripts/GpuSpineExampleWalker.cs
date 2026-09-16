@@ -3,7 +3,7 @@ using Spine.Unity;
 using UnityEngine;
 
 namespace GpuSpine.Example {
-    /// <summary>示例角色：保存移动状态，切换蒙皮时保持动画与位置连续。</summary>
+    /// <summary>Example character: keeps motion state so a skinning toggle does not reset animation or position.</summary>
     public sealed class GpuSpineExampleWalker : MonoBehaviour {
         public SkeletonAnimation Skeleton;
         public GpuSkeletonRenderer Gpu;
@@ -17,7 +17,7 @@ namespace GpuSpine.Example {
         float m_speed;
         float m_phase;
 
-        /// <summary>固定种子生成角色差异，避免 CPU/GPU 对比时改变负载。</summary>
+        /// <summary>Seeded per-character variation so a CPU/GPU compare does not change the workload.</summary>
         public void Configure(int kind, int ordinal) {
             Kind = kind;
             Ordinal = ordinal;
@@ -32,7 +32,7 @@ namespace GpuSpine.Example {
             Skeleton.Skeleton.ScaleX = m_direction;
         }
 
-        /// <summary>真实 Spine Skin 切换；恢复当前动画姿态，不重置 TrackTime。</summary>
+        /// <summary>Real Spine skin switch. Restores the current pose and does not reset TrackTime.</summary>
         public void ApplySkin(int selection) {
             SkinIndex = selection < 0 ? Ordinal % 3 : Mathf.Clamp(selection, 0, 2);
             Skeleton.Skeleton.SetSkin(SkinNames[Kind][SkinIndex]);
@@ -43,10 +43,10 @@ namespace GpuSpine.Example {
             transform.localPosition = position;
         }
 
-        // 不同行之间没有几何重叠；以皮肤分组的深度让混合展示仍能合批。
+        // Lanes do not overlap in geometry. Skin-grouped depth keeps mixed display batchable.
         float Depth => Kind * -0.1f + SkinIndex * -0.02f;
 
-        /// <summary>仅在数量或窗口比例改变时安排位置，模式切换不会调用此方法。</summary>
+        /// <summary>Layout only when count or aspect changes. A mode switch does not call this.</summary>
         public void Arrange(int columns, int rowOffset, float left) {
             int row = Ordinal / columns + rowOffset;
             int column = Ordinal % columns;
@@ -54,7 +54,7 @@ namespace GpuSpine.Example {
                 -row * 2.05f, Depth);
         }
 
-        /// <summary>水平行走与边界转向；所有角色由控制器统一推进。</summary>
+        /// <summary>Horizontal walk and edge turn. The controller advances every character.</summary>
         public void Tick(float deltaTime, float left, float right) {
             Vector3 position = transform.localPosition;
             position.x += m_direction * m_speed * deltaTime;

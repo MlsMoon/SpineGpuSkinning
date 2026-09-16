@@ -9,3 +9,4 @@ Two skills ship with this plugin. The folder is named `Skills~` so Unity ignores
 
 Host projects: copy the skill folder into `.agents/skills/` or `.cursor/skills/`.
 Standalone clone of this repo: read [`../AGENTS.md`](../AGENTS.md) first; many agents already load that file.
+Agent-facing text (`SKILL.md`, references, git commits) is English.

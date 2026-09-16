@@ -112,6 +112,10 @@ Same rules as the use skill: two consts on `GpuSpineDiagnostics`, both default f
 - Capacity growth invalidates upload versions and rebinds every offset material.
 - Idle pool cap counts resource groups (64), not layout segments.
 
+## Git commits
+
+Use English Conventional Commits (`type(scope): description`). See `AGENTS.md`.
+
 ## References
 
 - `references/skinning-semantics.md`

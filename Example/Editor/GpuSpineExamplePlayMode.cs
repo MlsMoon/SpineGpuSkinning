@@ -2,7 +2,7 @@
 using UnityEngine;
 
 namespace GpuSpine.Example.Editor {
-    /// <summary>通过原生 Play Mode 运行示例，退出后恢复用户原有启动场景设置。</summary>
+    /// <summary>Run the example in native Play Mode and restore the user's play-start scene on exit.</summary>
     [InitializeOnLoad]
     public static class GpuSpineExamplePlayMode {
         const string PendingKey = "GpuSpine.Example.PlayPending";

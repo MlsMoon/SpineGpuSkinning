@@ -28,11 +28,11 @@ namespace GpuSpine.Core {
 	}
 
     /// <summary>
-    /// 同一骨架数据、图集材质和相机状态的共享上传组。
-    /// 布局视图共用缓冲，独立切片持有本帧几何范围；材质按实例偏移共享。
+    /// Shared upload group for one skeleton, atlas material, and camera state.
+    /// Layout views share buffers; each slice owns this frame's geometry range; materials are shared by instance offset.
     /// </summary>
 	internal sealed class GpuSpineBatch : IDisposable {
-		/// <summary>记录实际容量增长，首次提交才分配实例缓冲。</summary>
+		/// <summary>Counts real capacity growth. Instance buffers allocate on first submit.</summary>
 		static readonly ProfilerMarker CapacityMarker = new ProfilerMarker("GpuSpine.Batch.EnsureCapacity");
 		internal static int CapacityGrowths;
 		/// <summary>World-space margin added to the submission bounds; live poses deviate from the
@@ -94,7 +94,7 @@ namespace GpuSpine.Core {
 		/// <summary>Process-wide slice creation counter (monotonic), for allocation-churn diagnostics.</summary>
 		internal static int SlicesCreated;
 
-        /// <summary>只按当前帧的实际绘制数复用 args，布局历史不再累积材质和 args 对象。</summary>
+        /// <summary>Reuse args for this frame's actual draws only. Layout history does not accumulate materials or args.</summary>
         public GpuSpineBatchInfo GetSlice(GpuSpineSubmesh part, int start, int count) {
             using var sliceScope=GpuSpineCpuDiagnostics.Slice.Auto();
             var key = new GpuSpineSliceKey(part.IndexStart, part.IndexCount, start, count);
@@ -109,7 +109,7 @@ namespace GpuSpine.Core {
                 ArgsBuffer = slice.Args, Bounds = ComputeBounds(start, count), InstanceCount = count
             };
         }
-        /// <summary>同一实例偏移共享材质；不同几何切片只拥有独立 args。</summary>
+        /// <summary>Materials are shared per instance offset; each geometry slice owns its own args.</summary>
         Material GetOffsetMaterial(int start) {
             if (start == 0) return material;
             if (!offsetMaterials.TryGetValue(start, out Material result)) {
@@ -130,7 +130,7 @@ namespace GpuSpine.Core {
 			if (instances.Remove(renderer)) membershipVersion++;
 		}
 
-        /// <summary>按相机排序共享实例，重置本帧切片查询，并上传变化的骨骼与实例数据。</summary>
+        /// <summary>Sort shared instances for the camera, reset this frame's slice queries, and upload dirty bone/instance data.</summary>
 		public void PrepareFrame (Camera camera) {
             frameSlices.Clear(); usedSlices = 0;
 			submission.Clear();
@@ -198,8 +198,8 @@ namespace GpuSpine.Core {
                             GpuSpineCpuDiagnostics.Copy(GpuSpineDataChannel.Clipping, renderer.Clipping.TriangleVertices, 0, clipVertexStaging, i * Entry.ClipVertexCapacity, Entry.ClipVertexCapacity, 8);
                             GpuSpineCpuDiagnostics.Copy(GpuSpineDataChannel.Clipping, renderer.Clipping.SlotRanges, 0, clipRangeStaging, i * slotCount, slotCount, 8);
                         } else {
-                            // IgnoreClipping 实例：范围段清零，shader 侧 range.y == 0 直接保留全部片元。
-                            // 顶点段无需处理（范围为零时不会被读取），布局与容量保持不变。
+                            // IgnoreClipping: clear ranges so GpuSpineClip keeps every fragment (range.y == 0).
+                            // Vertices are unread when the range is empty; layout and capacity stay unchanged.
                             Array.Clear(clipRangeStaging, i * slotCount, slotCount);
                             GpuSpineCpuDiagnostics.RecordCopy(GpuSpineDataChannel.Clipping, slotCount, 8);
                         }
