@@ -1,0 +1,16 @@
+{
+  "id": "spine-gpu-skinning-skill",
+  "kind": "routing",
+  "name": "spine-gpu-skinning-skill",
+  "parentId": "spine-gpu-skinning",
+  "routes": [
+    {
+      "title": "接入 / 排错",
+      "path": "Skills~/gpuspine-use-plugin/SKILL.md"
+    },
+    {
+      "title": "改插件源码",
+      "path": "Skills~/gpuspine-develop-plugin/SKILL.md"
+    }
+  ]
+}

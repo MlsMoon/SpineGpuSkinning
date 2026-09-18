@@ -12,7 +12,9 @@ Read a skill before writing code. Do not invent APIs from memory or from older R
 | Human overview | [`README.md`](README.md) |
 
 Skills live in `Skills~/` so Unity ignores them when this folder sits under `Assets/`.
-Copy a skill folder into the host project's `.agents/skills/` or `.cursor/skills/` if the agent only auto-loads those paths.
+Host projects installed by Moon Game Dev Tool Manager get a routing skill
+`spine-gpu-skinning-skill` (created from `.mlsmoon/skill.json`). Read that first;
+it points here. Do not copy `Skills~/` into the host `.agents/skills` as standalone skills.
 
 ## Hard rules
 
