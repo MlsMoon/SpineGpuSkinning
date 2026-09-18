@@ -12,9 +12,10 @@ Read a skill before writing code. Do not invent APIs from memory or from older R
 | Human overview | [`README.md`](README.md) |
 
 Skills live in `Skills~/` so Unity ignores them when this folder sits under `Assets/`.
-Host projects installed by Moon Game Dev Tool Manager get a routing skill
-`spine-gpu-skinning-skill` (created from `.mlsmoon/skill.json`). Read that first;
-it points here. Do not copy `Skills~/` into the host `.agents/skills` as standalone skills.
+Host projects installed by Moon Game Dev Tool Manager get a thin routing skill
+`spine-gpu-skinning-skill` (from `.mlsmoon/skill.json`). It only chooses a skill
+below. Put durable contracts and xx host cases in `Skills~/`, not in the router.
+Do not copy `Skills~/` into the host `.agents/skills` as standalone skills.
 
 ## Hard rules
 
@@ -23,8 +24,8 @@ it points here. Do not copy `Skills~/` into the host `.agents/skills` as standal
 - The runtime never bakes. Missing or incompatible baked data stays on the CPU path.
 - Verify signatures in this repo before calling them. Cross-session memory is untrusted.
 - Host-project smoke tools hang under `Tools/GPUSpineSkin/Temp`, not a new top-level menu.
-- Agent-facing text in this repository is English: `AGENTS.md`, `Skills~/`, XML comments,
-  and git commit subjects/bodies.
+- Agent-facing text in this repository is English: `AGENTS.md`, `Skills~/`,
+  `.mlsmoon/` routing skill, XML comments, and git commit subjects/bodies.
 
 ## Git commits
 

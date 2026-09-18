@@ -12,13 +12,13 @@ An independent, interactive CPU/GPU skinning comparison with two original charac
 5. Choose **Mixed skins**, **Ember / Mint**, **Forest / Copper**, or **Midnight / Rose**.
 6. Enter a count and press **Apply**, or choose **32 / 100 / 300 / 1000**.
 
-The default is 32 complex couriers. The production profile uses the same high-complexity mesh at 300 instances so CPU Mesh work becomes visible in the comparison. Use **Simple duo / Complex courier / Ultra 100 bones** to select the workload. **Production 300 cats** is a one-click 300-instance stress profile.
+The default is 32 complex couriers. The production profile uses the same high-complexity mesh at 300 instances so CPU Mesh work becomes visible in the comparison. Use **Simple duo / Complex courier / Ultra 100 bones** to select the workload. **Production 300** is a one-click 300-instance stress profile.
 The simple duo splits the count evenly between adventurers and robots. Counts range
 from 0 to 1000; odd counts give the adventurer one extra instance. Characters walk along
 lanes with deterministic variation in speed, direction and starting animation phase.
 The camera fits the crowd when the count or window aspect changes.
 
-The UI uses IMGUI. No ActFramework, CustomUI, TextMesh Pro, input package, project-specific
+The UI uses IMGUI. No host game framework, UI kit, TextMesh Pro, input package,
 renderer feature or game startup scene is required. Prefabs are saved inactive so references
 and mode are configured before their first activation; enable them when using them manually.
 

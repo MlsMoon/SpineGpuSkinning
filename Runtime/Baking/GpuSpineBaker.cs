@@ -536,7 +536,7 @@ namespace GpuSpine.Baking {
 		/// <summary>
 		/// Returns the attachment of the given slot whose Name matches, walking a skin's
 		/// placeholders (null skin-safe). Needed because an attachment's Name may differ from its
-		/// placeholder key (SkeletonJson loads the JSON name field, e.g. "CatS_01/body" vs "body").</summary>
+		/// placeholder key (SkeletonJson loads the JSON name field, e.g. "Xx_01/body" vs "body").</summary>
 		static Attachment FindAttachmentByName (Skin skin, int slotIndex, string attachmentName) {
 			if (skin == null || attachmentName == null) return null;
 			foreach (Skin.SkinEntry entry in skin.Attachments) {

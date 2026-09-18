@@ -211,7 +211,7 @@ this in the vertex shader instead of the bake:
   tint black is not implemented.
 
 **Name-vs-key pitfall (both dynamic slots and deform slots)**: an attachment's `Name`
-(e.g. `CatS_01/body`, from the JSON `name` field) can differ from its skin placeholder
+(e.g. `Xx_01/body`, from the JSON `name` field) can differ from its skin placeholder
 key (e.g. `body`). Everything matched at runtime against `Slot.Attachment.Name` — the
 dynamic slot table (`GpuSpineAuditor.CollectSlotAttachmentNames`) and the deform segment
 resolution (`GpuSpineBaker.FindAttachmentByName`) — must use the **Name**, never the

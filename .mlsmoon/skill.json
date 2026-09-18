@@ -5,11 +5,11 @@
   "parentId": "spine-gpu-skinning",
   "routes": [
     {
-      "title": "接入 / 排错",
+      "title": "Use the plugin",
       "path": "Skills~/gpuspine-use-plugin/SKILL.md"
     },
     {
-      "title": "改插件源码",
+      "title": "Develop the plugin",
       "path": "Skills~/gpuspine-develop-plugin/SKILL.md"
     }
   ]

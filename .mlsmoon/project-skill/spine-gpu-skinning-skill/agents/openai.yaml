@@ -1,0 +1,4 @@
+interface:
+  display_name: "GpuSpine: Host Router"
+  short_description: "Route to packaged use/develop skills. Do not store host-project facts here."
+  default_prompt: "Use $spine-gpu-skinning-skill only to pick a source skill. Edit Skills~/ contracts, not this router."

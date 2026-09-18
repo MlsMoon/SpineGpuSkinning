@@ -118,8 +118,14 @@ Same rules as the use skill: two consts on `GpuSpineDiagnostics`, both default f
 
 Use English Conventional Commits (`type(scope): description`). See `AGENTS.md`.
 
+## Host cases (xx)
+
+Measured idle-pool / layout-mesh numbers: `references/batch-lifecycle-xx.md`.
+Do not write a real project's roster or asset names here.
+
 ## References
 
 - `references/skinning-semantics.md`
 - `references/buffer-layouts.md`
+- `references/batch-lifecycle-xx.md`
 - Sibling use skill for public component / fallback / shader contracts

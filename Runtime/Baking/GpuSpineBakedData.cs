@@ -39,7 +39,7 @@ namespace GpuSpine.Baking {
 		/// declared combinations. Entries whose <see cref="GpuSpineBakedEntry.Mesh"/> is null record a
 		/// bake-time hard failure (e.g. vertex count overflow) for that combination.</summary>
 		public List<GpuSpineBakedEntry> Entries = new List<GpuSpineBakedEntry>();
-		/// <summary>User-editable skin combination declarations (e.g. base skin + Dirty overlay). The
+		/// <summary>User-editable skin combination declarations (e.g. base skin + overlay). The
 		/// bake processor bakes one entry per declaration; preserved across rebakes.</summary>
 		public List<GpuSpineComboDeclaration> DeclaredCombos = new List<GpuSpineComboDeclaration>();
 
@@ -60,7 +60,7 @@ namespace GpuSpine.Baking {
 	/// stacked via Skin.AddSkin in array order, later skins overriding earlier ones per placeholder).</summary>
 	[Serializable]
 	public sealed class GpuSpineComboDeclaration {
-		/// <summary>Display name of the baked entry (e.g. "CatS_01+Dirty"). Falls back to the joined
+		/// <summary>Display name of the baked entry (e.g. "Xx_01+Overlay"). Falls back to the joined
 		/// skin names when empty.</summary>
 		public string DisplayName;
 		/// <summary>Skin names to stack, in AddSkin order. Every name must exist in SkeletonData.Skins.</summary>

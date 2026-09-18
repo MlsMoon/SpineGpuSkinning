@@ -168,7 +168,7 @@ namespace GpuSpine.Baking {
 		static void CollectSlotAttachmentNames (Skin skin, int slotIndex, SortedSet<string> names) {
 			if (skin == null) return;
 			foreach (Skin.SkinEntry entry in skin.Attachments) {
-				// Collect the attachment Name (e.g. "CatS_01/body"), not the placeholder key
+				// Collect the attachment Name (e.g. "Xx_01/body"), not the placeholder key
 				// ("body"): the runtime matches variants against Slot.Attachment.Name, which may
 				// differ from the key (SkeletonJson loads the JSON name field).
 				if (entry.SlotIndex == slotIndex && entry.Attachment != null && entry.Attachment.Name != null)

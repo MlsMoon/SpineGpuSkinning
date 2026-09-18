@@ -244,8 +244,19 @@ Complete sample: `references/integration-examples.md`.
 - Production GPU registration, baking, and menus are not behind the validation gate.
 - After flipping a const, wait for the host assembly to recompile.
 
+## Host cases (xx)
+
+Fictional host **xx**. Pattern only; do not paste a real project's paths here.
+
+- Wiring shape: `references/host-integration-xx.md`
+- Custom Pass redraw + overlay A-B: `references/custom-pass-redraw-xx.md`
+- Character bake options: `references/character-setup-xx.md`
+
 ## References
 
 - `references/fallback-rules.md`
 - `references/integration-examples.md`
+- `references/host-integration-xx.md`
+- `references/custom-pass-redraw-xx.md`
+- `references/character-setup-xx.md`
 - Sibling develop skill for bake/buffer contracts
