@@ -20,7 +20,7 @@ GPU skinning for [spine-unity](http://esotericsoftware.com/spine-unity) `Skeleto
 2. Select the GameObject that has your `SkeletonAnimation`.
 3. Add component → `Gpu Skeleton Renderer`.
 
-On import, every `SkeletonDataAsset` is audited and baked in the editor. The container (audit report + one prototype mesh per skin combination, plus draw-order layouts) is a sub-asset of that asset. The component:
+Import does **not** bake. Bake from the Inspector (`Bake Skeleton Data` appears when the referenced `SkeletonDataAsset` has no container), `Tools/GPUSpineSkin/Bake All Skeleton Data`, or `Rebake Selected`. The container (audit report + one prototype mesh per skin combination, plus draw-order layouts) is a sub-asset of that asset. The component:
 
 - looks up the baked entry for the current skin and draw-order layout (the runtime never bakes; a miss stays on the CPU path);
 - switches to GPU when an entry exists — `updateMode` becomes `EverythingExceptMesh` and automatic `MeshRenderer` draws are suppressed;
@@ -73,10 +73,11 @@ A same-machine Windows DX11 Player sample (1280×720, 32 UltraCourier) recorded 
 
 ## Editor menus
 
-All generic tools hang under **`Tools/GPUSpineSkin`**. They operate on the selected `SkeletonDataAsset`(s):
+All generic tools hang under **`Tools/GPUSpineSkin`**. Selection items need one or more `SkeletonDataAsset`s; Bake All does not.
 
 | Menu | What it does |
 |---|---|
+| `Tools/GPUSpineSkin/Bake All Skeleton Data` | Rebake every `SkeletonDataAsset` in the project. Current containers are skipped. |
 | `Tools/GPUSpineSkin/Rebake Selected` | Rebake if the source fingerprint or entry keys changed. |
 | `Tools/GPUSpineSkin/Force Rebake Selected` | Clear the fingerprint and rebuild even when the no-change check would skip. |
 | `Tools/GPUSpineSkin/Log Audit Report` | Log the graded audit without baking. |

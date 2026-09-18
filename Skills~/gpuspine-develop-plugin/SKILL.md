@@ -20,8 +20,8 @@ SkeletonAnimation (unmodified Spine runtime)
   |    updateMode = EverythingExceptMesh; MeshRenderer.forceRenderingOff.
   |    AnimationState, mixing, events, physics, bone worlds keep running.
   v
-  2. BAKING (editor, one-shot) — Editor/GpuSpineBakeProcessor.cs,
-     Editor/GpuSpineBakerEditorUtility.cs, Editor/GpuSpineEditorMenu.cs,
+  2. BAKING (editor, one-shot, manual) — Editor/GpuSpineBakerEditorUtility.cs,
+     Editor/GpuSpineEditorMenu.cs, Editor/GpuSkeletonRendererEditor.cs,
      Runtime/Baking/GpuSpineAuditor.cs, GpuSpineBaker.cs, GpuSpineOrderBaker.cs,
      GpuSpineBakeKey.cs
      Audit -> bind-pose entry per skin combo -> DrawOrderLayouts + clip capacity
@@ -49,6 +49,8 @@ SkeletonAnimation (unmodified Spine runtime)
 | `Runtime/Baking/GpuSpineBaker.cs` | Pure bake; `BakeFormatVersion = 5` |
 | `Runtime/Baking/GpuSpineOrderBaker.cs` | Index-only draw-order layouts + clip capacity |
 | `Editor/GpuSpineBakerEditorUtility.cs` | Persist, fingerprint v2, ForceRebake |
+| `Editor/GpuSkeletonRendererEditor.cs` | Inspector `Bake Skeleton Data` when no container |
+| `Editor/GpuSpineEditorMenu.cs` | Bake All / Rebake Selected / Force Rebake / audit dump |
 | `Runtime/Shaders/SpineGpuSkinning.hlsl` | `GpuSpineSkinToWorld` (8 args) + `GpuSpineClip` |
 
 ## Per-frame data flow
@@ -79,7 +81,7 @@ SkeletonAnimation (unmodified Spine runtime)
 
 1. **Shared page materials.** Spine flips `enableInstancing` on shared page materials. Batch materials are always clones.
 2. **`OnBecameVisible` resets `updateMode`.** Disabled automatic draws + `LateUpdate` re-force `EverythingExceptMesh`. External `Renderer.enabled` maps to `Visible`.
-3. **Import-loop re-entrancy.** `Rebake` saves the `.asset`, which re-enters the postprocessor. Fingerprint excludes the SkeletonDataAsset itself. v2 hashes file **content**, so checkout/branch switches that only rewrite timestamps do not rebake.
+3. **Import does not bake.** There is no AssetPostprocessor. GPU data is created only by Inspector `Bake Skeleton Data`, `Bake All Skeleton Data`, or `Rebake Selected`. Fingerprint v2 still skips unchanged sources; it excludes the SkeletonDataAsset itself because `Rebake` saves that file.
 4. **`Skin.AddSkin` order is the content key.** Do not reimplement `GpuSpineBaker.BuildEffectiveSkin`.
 5. **MaterialOverride is same-shader-family only.** `ResolveMaterialShader` uses the override shader only when `page.shader == MaterialOverride.shader`; otherwise `DefaultShader`.
 6. **Stale containers without layouts.** `ResolveEntry` returns null when `DrawOrderLayouts` is empty and the audit has draw-order or clipping. Force-rebake. Do not revive `AllowDrawOrderTimeline` as a gate.

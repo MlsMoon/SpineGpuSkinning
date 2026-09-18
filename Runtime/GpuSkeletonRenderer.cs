@@ -26,7 +26,7 @@ namespace GpuSpine {
 		public Material MaterialOverride;
 
 		/// <summary>The baked data container of this skeleton (a sub-asset of the SkeletonDataAsset,
-		/// produced by the editor bake processor). When null, the component falls back to the
+		/// produced by a manual editor bake). When null, the component falls back to the
 		/// <see cref="GpuSpineBakedRuntime"/> registry (game side registers containers there). When no
 		/// container is available at all, the component stays on the CPU path with a warning.</summary>
 		[Tooltip("Baked GPU data of this skeleton (sub-asset of the SkeletonDataAsset). Leave empty to use the GpuSpineBakedRuntime registry.")]
@@ -607,8 +607,21 @@ namespace GpuSpine {
 		internal ulong ClippingVersion => clippingVersion;
 		internal GpuSpineClippingState Clipping => clipping;
 		internal GpuSpineBakedEntry CurrentEntry => currentEntry;
-		internal Shader ResolveMaterialShader(Material page) => MaterialOverride != null && page != null && page.shader == MaterialOverride.shader
-			? MaterialOverride.shader : currentBakedData != null ? currentBakedData.DefaultShader : null;
+		/// <summary>Match shader implementations across separately loaded asset-bundle copies.</summary>
+		internal bool TryResolveMaterialOverride(Material page, out Shader shader) {
+			shader = null;
+			if (page == null || MaterialOverride == null) return false;
+			Shader pageShader = page.shader;
+			Shader overrideShader = MaterialOverride.shader;
+			if (pageShader == null || overrideShader == null) return false;
+			if (pageShader != overrideShader && !string.Equals(pageShader.name, overrideShader.name,
+					System.StringComparison.Ordinal)) return false;
+			shader = overrideShader;
+			return true;
+		}
+
+		internal Shader ResolveMaterialShader(Material page) => TryResolveMaterialOverride(page, out Shader shader)
+			? shader : currentBakedData != null ? currentBakedData.DefaultShader : null;
 
 		public Bounds WorldBounds {
 			get {

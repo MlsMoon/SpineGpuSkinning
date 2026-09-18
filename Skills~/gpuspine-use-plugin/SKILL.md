@@ -43,7 +43,7 @@ Correct:
 
 - `SkeletonAnimation` and `MeshRenderer` on the same GameObject or a child.
 - `SkeletonRenderer.zSpacing` left at `0`.
-- Skeleton data imported after the plugin is installed (or `Tools/GPUSpineSkin/Rebake Selected`).
+- The referenced `SkeletonDataAsset` has a `GpuSpineBakedData` container. Import does not bake; use Inspector `Bake Skeleton Data`, `Tools/GPUSpineSkin/Bake All Skeleton Data`, or `Rebake Selected`.
 
 Common mistakes:
 
@@ -54,10 +54,14 @@ Common mistakes:
 
 ## 2. Editor baking
 
-Sources: `Editor/GpuSpineBakeProcessor.cs`, `Editor/GpuSpineBakerEditorUtility.cs`.
+Sources: `Editor/GpuSpineBakerEditorUtility.cs`, `Editor/GpuSpineEditorMenu.cs`,
+`Editor/GpuSkeletonRendererEditor.cs`.
 
-- Import/update of a `SkeletonDataAsset` audits and bakes one entry per skin combination
-  (default + every single skin + `DeclaredCombos`).
+- Import/update of a `SkeletonDataAsset` does **not** bake. GPU data is created only by
+  a manual bake: Inspector `Bake Skeleton Data` (shown when the referenced asset has no
+  container), `Tools/GPUSpineSkin/Bake All Skeleton Data`, or `Rebake Selected`.
+- A bake audits and writes one entry per skin combination (default + every single skin +
+  `DeclaredCombos`).
 - Container `GpuSpineBakedData` is a sub-asset of the `.asset`. Failed audits still write
   the container (report only, no meshes).
 - No-change check: source fingerprint **v2** (dependency path + length + content hash +
@@ -66,8 +70,10 @@ Sources: `Editor/GpuSpineBakeProcessor.cs`, `Editor/GpuSpineBakerEditorUtility.c
 - Each entry also stores `DrawOrderLayouts` (setup order plus every unique
   `DrawOrderTimeline` permutation) and `ClipVertexCapacity`.
 
-Menus (selection of one or more `SkeletonDataAsset`):
+Menus:
 
+- `Tools/GPUSpineSkin/Bake All Skeleton Data` — Rebake every `SkeletonDataAsset` in the
+  project. Already-current containers are skipped. Does not use the Selection.
 - `Tools/GPUSpineSkin/Rebake Selected` — skip when fingerprint and keys match.
 - `Tools/GPUSpineSkin/Force Rebake Selected` — clear fingerprint first. Use when meshes
   were deleted by hand, or the baked state must rebuild with no source change.

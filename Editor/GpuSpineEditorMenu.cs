@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using GpuSpine.Baking;
 using Spine.Unity;
 using UnityEditor;
@@ -27,6 +27,44 @@ namespace GpuSpine.Editor {
 
 		static SkeletonDataAsset[] SelectedAssets () {
 			return Selection.GetFiltered<SkeletonDataAsset>(SelectionMode.Assets);
+		}
+
+		[MenuItem(Root + "/Bake All Skeleton Data", false, -10)]
+		static void BakeAllSkeletonData () {
+			string[] guids = AssetDatabase.FindAssets("t:SkeletonDataAsset");
+			int baked = 0;
+			int skipped = 0;
+			int failed = 0;
+			try {
+				for (int i = 0; i < guids.Length; i++) {
+					string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+					SkeletonDataAsset asset = AssetDatabase.LoadAssetAtPath<SkeletonDataAsset>(path);
+					string label = asset != null ? asset.name : path;
+					EditorUtility.DisplayProgressBar("GpuSpine", "Baking " + label, guids.Length == 0 ? 0f : (float)i / guids.Length);
+					if (asset == null) {
+						failed++;
+						continue;
+					}
+					try {
+						GpuSpineBakedData container = GpuSpineBakerEditorUtility.FindContainer(path);
+						if (container != null && GpuSpineBakerEditorUtility.IsCurrent(container)) {
+							skipped++;
+							continue;
+						}
+						GpuSpineBakedData result = GpuSpineBakerEditorUtility.Rebake(asset);
+						if (result == null) failed++;
+						else baked++;
+					} catch (System.Exception exception) {
+						failed++;
+						Debug.LogException(exception, asset);
+					}
+				}
+			} finally {
+				EditorUtility.ClearProgressBar();
+			}
+			Debug.Log("GpuSpine Bake All Skeleton Data: baked " + baked
+				+ ", skipped (up to date) " + skipped
+				+ ", failed " + failed + ".");
 		}
 
 		[MenuItem(Root + "/Rebake Selected", false, 0)]
@@ -80,7 +118,7 @@ namespace GpuSpine.Editor {
 			for (int i = 0; i < material.passCount; i++)
 				builder.Append("\n  pass '").Append(material.GetPassName(i)).Append("' SetPass=")
 					.Append(material.SetPass(i));
-			Object.DestroyImmediate(material);
+			UnityEngine.Object.DestroyImmediate(material);
 			Debug.Log(builder.ToString());
 		}
 

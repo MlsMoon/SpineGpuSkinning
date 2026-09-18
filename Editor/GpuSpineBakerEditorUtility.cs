@@ -10,6 +10,9 @@ using Spine.Unity;
 using UnityEditor;
 using UnityEngine;
 
+// EnableLogging is const false so the opted-in bake logs are compiled out.
+#pragma warning disable CS0162
+
 namespace GpuSpine.Editor {
 	/// <summary>
 	/// Editor-side bake orchestration: audits one SkeletonDataAsset and bakes every target skin
@@ -21,9 +24,9 @@ namespace GpuSpine.Editor {
 	/// container — report only, no meshes.
 	/// <para/>
 	/// The existing container is reused, so user edits to
-	/// <see cref="GpuSpineBakedData.DeclaredCombos"/> survive rebakes. Saving the container re-triggers
-	/// the asset postprocessor; the no-change check (source fingerprint + entry keys) then returns
-	/// early without saving, which terminates the import loop.
+	/// <see cref="GpuSpineBakedData.DeclaredCombos"/> survive rebakes. Baking is manual:
+	/// Inspector Bake Skeleton Data, Rebake Selected, or Bake All Skeleton Data. The no-change
+	/// check (source fingerprint + entry keys) still returns early without saving when current.
 	/// </summary>
 	public static class GpuSpineBakerEditorUtility {
 		/// <summary>zSpacing every entry is baked with (v1 simplification: all known skeletons use 0;
@@ -323,3 +326,5 @@ namespace GpuSpine.Editor {
 		}
 	}
 }
+
+#pragma warning restore CS0162

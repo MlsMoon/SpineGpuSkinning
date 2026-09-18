@@ -261,8 +261,8 @@ namespace GpuSpine.Core {
 				if (GpuSpineDiagnostics.EnableLogging) Debug.LogError("GpuSkinningManager: cannot create a batch material, both the atlas page material and the material override are null.");
 				return null;
 			}
-			bool useOverride = materialOverride != null && (pageMaterial == null || pageMaterial.shader == materialOverride.shader);
-			Shader shader = renderer.ResolveMaterialShader(pageMaterial);
+			bool useOverride = renderer.TryResolveMaterialOverride(pageMaterial, out Shader shader);
+			if (!useOverride) shader = renderer.ResolveMaterialShader(pageMaterial);
 			if (shader == null || !shader.isSupported) return null;
 			Material clone = new Material(source);
 			if (clone.shader != shader) clone.shader = shader;

@@ -20,7 +20,7 @@
 2. `SkeletonAnimation` 付きの GameObject を選択します。
 3. Add Component → `Gpu Skeleton Renderer`。
 
-インポート時に各 `SkeletonDataAsset` が自動監査・ベイクされます。ランタイムはベイクしません。コンポーネントを外すか無効にすると元の CPU 経路に戻ります。
+インポートではベイクしません。コンテナが無いときは Inspector の `Bake Skeleton Data`、または `Tools/GPUSpineSkin/Bake All Skeleton Data` / `Rebake Selected` を使います。ランタイムはベイクしません。コンポーネントを外すか無効にすると元の CPU 経路に戻ります。
 
 ## サンプル
 
@@ -28,7 +28,7 @@
 
 ## エディタメニュー
 
-共通ツールは **`Tools/GPUSpineSkin`** です。指紋 **v2** は依存ファイルの**内容**ハッシュです。タイムスタンプだけが変わる VCS checkout では再ベイクしません。手でメッシュを消したときや、ソース未変更で焼き直すときは Force Rebake を使います。
+共通ツールは **`Tools/GPUSpineSkin`** です。`Bake All Skeleton Data` は選択に依存せず、プロジェクト内の全 `SkeletonDataAsset` を Rebake します（最新ならスキップ）。指紋 **v2** は依存ファイルの**内容**ハッシュです。タイムスタンプだけが変わる VCS checkout では再ベイクしません。手でメッシュを消したときや、ソース未変更で焼き直すときは Force Rebake を使います。
 
 ## CPU フォールバック規則
 

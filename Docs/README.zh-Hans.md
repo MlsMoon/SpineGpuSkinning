@@ -20,7 +20,7 @@
 2. 选中带 `SkeletonAnimation` 的物体。
 3. Add Component → `Gpu Skeleton Renderer`。
 
-导入时编辑器会自动审计并烘焙每个 `SkeletonDataAsset`；容器（审计报告 + 每种皮肤组合一份原型网格 + 绘制顺序布局）作为该资产的子资源。组件会：
+导入**不会**烘焙。没有容器时在 Inspector 点 `Bake Skeleton Data`，或用 `Tools/GPUSpineSkin/Bake All Skeleton Data` / `Rebake Selected`。容器（审计报告 + 每种皮肤组合一份原型网格 + 绘制顺序布局）作为该资产的子资源。组件会：
 
 - 按当前皮肤组合和绘制顺序布局查找已烘焙入口（运行时从不烘焙；找不到则留在 CPU 路径）；
 - 有入口则切到 GPU：`updateMode = EverythingExceptMesh`，并抑制 `MeshRenderer` 自动绘制；
@@ -58,7 +58,7 @@
 
 ## 编辑器菜单
 
-通用工具在 **`Tools/GPUSpineSkin`**。源指纹 **v2** 哈希依赖文件**内容**（加路径和长度），只改时间戳的 VCS checkout 不会重烘。网格被手删、或源文件没变也要重建时，用 Force Rebake。
+通用工具在 **`Tools/GPUSpineSkin`**。`Bake All Skeleton Data` 不依赖选中项，会对工程内每个 `SkeletonDataAsset` 调用 Rebake（已是最新则跳过）。源指纹 **v2** 哈希依赖文件**内容**（加路径和长度），只改时间戳的 VCS checkout 不会重烘。网格被手删、或源文件没变也要重建时，用 Force Rebake。
 
 宿主临时冒烟请用 `Tools/GPUSpineSkin/Temp/...`。
 

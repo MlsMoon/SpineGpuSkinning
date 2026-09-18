@@ -14,10 +14,14 @@
 - Shared per-camera upload groups, draw slices, idle group pool, and combined layout index meshes.
 - `GpuSpineDiagnostics` consts (`EnableLogging`, `EnableAutomaticValidation`), both default `false`.
 - `GetLifecycleSnapshot()` value-type counters; `GetLifecycleCounters()` kept for compatibility.
+- Inspector `Bake Skeleton Data` on `GpuSkeletonRenderer` when the referenced asset has no container.
+- `Tools/GPUSpineSkin/Bake All Skeleton Data` rebakes every `SkeletonDataAsset` and skips current containers.
 
 ### Changed
 
-- Editor menus live under `Tools/GPUSpineSkin` (rebake / force rebake / audit / dump / inspect) with `Assets/GpuSpine` Project aliases. Host smoke tools hang off `Tools/GPUSpineSkin/Temp`.
+- Import of a `SkeletonDataAsset` no longer bakes. GPU data is created only by Inspector bake, Bake All, or Rebake Selected.
+- `MaterialOverride` also matches when the page and override shaders share a name (asset-bundle copies).
+- Editor menus live under `Tools/GPUSpineSkin` (bake all / rebake / force rebake / audit / dump / inspect) with `Assets/GpuSpine` Project aliases. Host smoke tools hang off `Tools/GPUSpineSkin/Temp`.
 - Primary submit is `Graphics.RenderMeshIndirect`. Custom passes may still resubmit with `DrawMeshInstancedIndirect` using the returned material/args pair.
 - `GpuSpineInstanceData` is 96 bytes (three affine rows + color + Custom0 + Custom1), not a 112-byte `Matrix4x4`.
 - Source fingerprint **v2**: dependency path + length + content hash. Timestamp-only VCS checkouts no longer rebake.
